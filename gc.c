@@ -1640,6 +1640,7 @@ rb_objspace_alloc(void)
     // See https://github.com/mmtk/mmtk-core/issues/214
     gc_init(heap_size);
     objspace->mutator = bind_mutator(10); // TODO replace with pointer to start of TLS
+    enable_collection(10);
 #endif
 
     return objspace;
@@ -2299,7 +2300,7 @@ newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protect
     rb_objspace_t *objspace = &rb_objspace;
     VALUE obj;
 #ifdef USE_THIRD_PARTY_HEAP
-    obj = (VALUE) alloc(objspace->mutator, sizeof(RVALUE), 8, 0, 0); // Default allocation semantics
+    obj = (VALUE) alloc(objspace->mutator, sizeof(RVALUE), RB_OBJECT_ALIGNMENT, 0, 0); // Default allocation semantics
     return newobj_init(klass, flags, v1, v2, v3, wb_protected, objspace, obj);
 #endif
 
@@ -2503,8 +2504,9 @@ static inline int
 is_pointer_to_heap(rb_objspace_t *objspace, void *ptr)
 {
 #ifdef USE_THIRD_PARTY_HEAP
-    return is_mapped_address(ptr);
+    return ((VALUE)ptr) % RB_OBJECT_ALIGNMENT == 0 && is_mapped_address(ptr);
 #endif
+
     register RVALUE *p = RANY(ptr);
     register struct heap_page *page;
     register size_t hi, lo, mid;
@@ -9351,7 +9353,6 @@ rb_objspace_gc_enable(rb_objspace_t *objspace)
     dont_gc = FALSE;
 #ifdef USE_THIRD_PARTY_HEAP
     dont_gc = TRUE;
-    // start_control_collector(0); // TODO use pointer to TLS
     return false;
 #endif
     return old ? Qtrue : Qfalse;
@@ -9995,7 +9996,7 @@ objspace_xmalloc0(rb_objspace_t *objspace, size_t size)
 
     size = objspace_malloc_prepare(objspace, size);
 #ifdef USE_THIRD_PARTY_HEAP
-    mem = alloc(objspace->mutator, size, 8, 0, 0); // Default allocation semantics
+    mem = alloc(objspace->mutator, size, RB_OBJECT_ALIGNMENT, 0, 0); // Default allocation semantics
 #else
     TRY_WITH_GC(mem = malloc(size));
 #endif
@@ -10094,7 +10095,7 @@ objspace_xrealloc(rb_objspace_t *objspace, void *ptr, size_t new_size, size_t ol
     // How on earth did this work?
     // For now, we just changed the old size, however this hack may be vulnerable if we need to
     // reallocate something to a smaller chunk of memory. FIXME!
-    mem = alloc(objspace->mutator, new_size, 8, 0, 0);
+    mem = alloc(objspace->mutator, new_size, RB_OBJECT_ALIGNMENT, 0, 0);
     memcpy(mem, ptr, (old_size < new_size ? old_size : new_size));
 #else
     TRY_WITH_GC(mem = realloc(ptr, new_size));
@@ -10286,7 +10287,7 @@ objspace_xcalloc(rb_objspace_t *objspace, size_t size)
 
     size = objspace_malloc_prepare(objspace, size);
 #ifdef USE_THIRD_PARTY_HEAP
-    mem = alloc(objspace->mutator, size, 8, 0, 0);
+    mem = alloc(objspace->mutator, size, RB_OBJECT_ALIGNMENT, 0, 0);
     memset(mem, 0, size);
 #else
     TRY_WITH_GC(mem = calloc1(size));
