@@ -103,6 +103,11 @@ extern void mmtk_harness_end(void *tls);
 extern void mmtk_register_finalizable(void *reff);
 extern void* mmtk_poll_finalizable(bool include_live);
 
+struct ObjectClosure {
+    void* (*func)(void* object, void *data);
+    void* data;
+};
+
 #ifdef __cplusplus
 }
 #endif

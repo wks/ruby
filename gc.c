@@ -14688,7 +14688,7 @@ struct rb_mmtk_address_buffer {
 typedef struct rb_mmtk_gc_thread_tls {
     int kind;                      // Controller or worker
     void *gc_context;              // Point to MMTk's GCController or GCWorker
-    struct rb_mmtk_address_buffer mark_buffer;
+    struct ObjectClosure mark_closure;
 } rb_mmtk_gc_thread_tls_t;
 
 #ifdef RB_THREAD_LOCAL_SPECIFIER
@@ -14711,28 +14711,6 @@ rb_mmtk_use_mmtk_global(void (*func)(void *), void* arg)
     if ((err = pthread_mutex_unlock(&rb_mmtk_global.mutex)) != 0) {
 	fprintf(stderr, "ERROR: cannot release rb_mmtk_global.mutex: %s", strerror(err));
 	abort();
-    }
-}
-static void
-rb_mmtk_flush_mark_buffer(void)
-{
-    mmtk_flush_mark_buffer(rb_mmtk_gc_thread_tls);
-    RUBY_ASSERT(rb_mmtk_gc_thread_tls->mark_buffer.len == 0);
-}
-
-static void
-rb_mmtk_add_to_mark_buffer(void* obj)
-{
-    RUBY_ASSERT(obj != NULL);
-    struct rb_mmtk_address_buffer *mark_buffer = &rb_mmtk_gc_thread_tls->mark_buffer;
-
-    RUBY_ASSERT(mark_buffer->len < mark_buffer->capa);
-
-    mark_buffer->slots[mark_buffer->len] = obj;
-    mark_buffer->len += 1;
-
-    if (mark_buffer->len == mark_buffer->capa) {
-	rb_mmtk_flush_mark_buffer();
     }
 }
 
@@ -15000,6 +14978,13 @@ rb_mmtk_scan_object_ruby_style(void *object)
     gc_mark_children(objspace, obj);
 }
 
+static inline void
+rb_mmtk_reset_mark_closure() {
+    rb_mmtk_assert_mmtk_worker();
+
+    
+}
+
 RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
     rb_mmtk_get_gc_thread_tls,
@@ -15013,6 +14998,7 @@ RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_thread_roots,
     rb_mmtk_scan_thread_root,
     rb_mmtk_scan_object_ruby_style,
+    rb_mmtk_reset_mark_closure,
 };
 
 #endif
