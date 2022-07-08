@@ -14685,6 +14685,8 @@ struct rb_mmtk_address_buffer {
     size_t capa;
 };
 
+// Thread-local data for each GC worker.
+// Must match struct GCThreadTLS in Rust.
 typedef struct rb_mmtk_gc_thread_tls {
     int kind;                      // Controller or worker
     void *gc_context;              // Point to MMTk's GCController or GCWorker
@@ -14720,6 +14722,11 @@ rb_gc_init_collection(void)
     rb_thread_t *cur_thread = GET_THREAD();
     mmtk_initialize_collection((void*)cur_thread);
     cur_thread->mutator = mmtk_bind_mutator((MMTk_VMMutatorThread)cur_thread);
+}
+
+static inline void*
+rb_mmtk_call_object_closure(void* object) {
+    return rb_mmtk_gc_thread_tls->mark_closure.func(object, rb_mmtk_gc_thread_tls->mark_closure.data);
 }
 
 static void
@@ -14951,7 +14958,7 @@ rb_mmtk_mark(VALUE obj, bool pin)
 	(void*)obj);
 
     if (!RB_SPECIAL_CONST_P(obj)) {
-	rb_mmtk_add_to_mark_buffer((void*)obj);
+	rb_mmtk_call_object_closure((void*)obj);
     }
 }
 
@@ -14978,13 +14985,6 @@ rb_mmtk_scan_object_ruby_style(void *object)
     gc_mark_children(objspace, obj);
 }
 
-static inline void
-rb_mmtk_reset_mark_closure() {
-    rb_mmtk_assert_mmtk_worker();
-
-    
-}
-
 RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
     rb_mmtk_get_gc_thread_tls,
@@ -14998,7 +14998,6 @@ RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_thread_roots,
     rb_mmtk_scan_thread_root,
     rb_mmtk_scan_object_ruby_style,
-    rb_mmtk_reset_mark_closure,
 };
 
 #endif
