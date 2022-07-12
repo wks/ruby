@@ -14726,7 +14726,9 @@ rb_gc_init_collection(void)
 
 static inline void*
 rb_mmtk_call_object_closure(void* object) {
-    return rb_mmtk_gc_thread_tls->mark_closure.func(object, rb_mmtk_gc_thread_tls->mark_closure.data);
+    return rb_mmtk_gc_thread_tls->mark_closure.c_function(rb_mmtk_gc_thread_tls->mark_closure.rust_closure,
+                                                          rb_mmtk_gc_thread_tls->gc_context,
+                                                          object);
 }
 
 static void

@@ -104,8 +104,8 @@ extern void mmtk_register_finalizable(void *reff);
 extern void* mmtk_poll_finalizable(bool include_live);
 
 struct ObjectClosure {
-    void* (*func)(void* object, void *data);
-    void* data;
+    void* (*c_function)(void* rust_closure, void* worker, void *data);
+    void* rust_closure;
 };
 
 #ifdef __cplusplus
