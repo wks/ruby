@@ -12607,7 +12607,7 @@ objspace_xmalloc0(rb_objspace_t *objspace, size_t size)
     if (rb_mmtk_enabled_p()) {
         void *mem = mmtk_counted_malloc(size + sizeof(size_t));
         void *offsetted = rb_mmtk_make_offsetted(mem, size);
-        printf("objspace_xcalloc(%zu) = %p\n", size, offsetted);
+        RUBY_DEBUG_LOG(__func__ "(objspace, %zu) = %p\n", size, offsetted);
         return offsetted;
     }
 #endif
@@ -12681,7 +12681,8 @@ objspace_xrealloc(rb_objspace_t *objspace, void *ptr, size_t new_size, size_t ol
         size_t *size_field = (size_t*)ptr - 1;
         size_t recorded_size = *size_field;
         void *start = (void*)size_field;
-        printf("objspace_xrealloc(%p, %zu, %zu), start: %p, recorded size: %zu\n", ptr, new_size, old_size, start, recorded_size);
+        RUBY_DEBUG_LOG(__func__ "(objspace, %p, %zu, %zu), start: %p, recorded size: %zu\n",
+                       ptr, new_size, old_size, start, recorded_size);
         void *new_start = mmtk_realloc_with_old_size(start, new_size + sizeof(size_t), recorded_size + sizeof(size_t));
         void *new_offsetted = rb_mmtk_make_offsetted(new_start, new_size);
         return new_offsetted;
@@ -12786,7 +12787,8 @@ objspace_xfree(rb_objspace_t *objspace, void *ptr, size_t old_size)
         size_t *size_field= (size_t*)ptr - 1;
         size_t recorded_size = *size_field;
         void *start = (void*)size_field;
-        printf("objspace_xfree(%p, %zu), start: %p, recorded size: %zu\n", ptr, old_size, start, recorded_size);
+        RUBY_DEBUG_LOG(__func__ "(objspace, %p, %zu), start: %p, recorded size: %zu\n",
+                       ptr, old_size, start, recorded_size);
         return mmtk_free_with_size(start, recorded_size + sizeof(size_t));
     }
 #endif
@@ -12893,7 +12895,7 @@ objspace_xcalloc(rb_objspace_t *objspace, size_t size)
     if (rb_mmtk_enabled_p()) {
         void *mem = mmtk_counted_calloc(1, size + sizeof(size_t));
         void *offsetted = rb_mmtk_make_offsetted(mem, size);
-        printf("objspace_xcalloc(%zu) = %p\n", size, offsetted);
+        RUBY_DEBUG_LOG(__func__ "(objspace, %zu) = %p\n", size, offsetted);
         return offsetted;
     }
 #endif
@@ -15343,6 +15345,11 @@ rb_mmtk_scan_object_ruby_style(void *object)
     gc_mark_children(objspace, obj);
 }
 
+static void
+rb_mmtk_obj_free(void *object) {
+    obj_free(&rb_objspace, (VALUE)object);
+}
+
 RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
     rb_mmtk_get_gc_thread_tls,
@@ -15356,6 +15363,7 @@ RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_thread_roots,
     rb_mmtk_scan_thread_root,
     rb_mmtk_scan_object_ruby_style,
+    rb_mmtk_obj_free,
 };
 
 // Use up to 80% of memory for the heap
