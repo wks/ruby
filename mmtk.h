@@ -39,6 +39,11 @@ typedef struct {
     void (*scan_object_ruby_style)(void *object);
 } RubyUpcalls;
 
+struct ObjectClosure {
+    void* (*c_function)(void* rust_closure, void* worker, void *data);
+    void* rust_closure;
+};
+
 /**
  * MMTK builder and options
  */
@@ -113,10 +118,13 @@ extern void mmtk_harness_end(void *tls);
 extern void mmtk_register_finalizable(void *reff);
 extern void* mmtk_poll_finalizable(bool include_live);
 
-struct ObjectClosure {
-    void* (*c_function)(void* rust_closure, void* worker, void *data);
-    void* rust_closure;
-};
+/**
+ * Counted malloc/free
+ */
+void* mmtk_counted_malloc(size_t size);
+void* mmtk_counted_calloc(size_t num, size_t size);
+void* mmtk_realloc_with_old_size(void* addr, size_t size, size_t old_size);
+void mmtk_free_with_size(void* addr, size_t old_size);
 
 #ifdef __cplusplus
 }

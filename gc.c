@@ -12576,12 +12576,42 @@ objspace_malloc_fixup(rb_objspace_t *objspace, void *mem, size_t size)
     } while (0)
 #endif
 
+#if USE_MMTK
+/*
+ * Hide a size field in front of xmalloc-ed memory, and return the
+ * offsetted address.
+ *
+ * In ruby_sized_xfree, the size parameter seems to be optional.
+ * It may just be 0, making it unreliable.
+ * xfree relies on malloc_usable_size anyway,
+ * but we have to implement our own malloc_usable_size counterpart.
+ * Therefore we hide a size field in front of the malloc-ed memory.
+ */
+static inline void *
+rb_mmtk_make_offsetted(void *mem, size_t size)
+{
+    size_t *size_field = (size_t*)mem;
+    *size_field = size;
+    void *offsetted = (void*)(size_field + 1);
+    return offsetted;
+}
+#endif
+
 /* these shouldn't be called directly.
  * objspace_* functions do not check allocation size.
  */
 static void *
 objspace_xmalloc0(rb_objspace_t *objspace, size_t size)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        void *mem = mmtk_counted_malloc(size + sizeof(size_t));
+        void *offsetted = rb_mmtk_make_offsetted(mem, size);
+        printf("objspace_xcalloc(%zu) = %p\n", size, offsetted);
+        return offsetted;
+    }
+#endif
+
     void *mem;
 
     size = objspace_malloc_prepare(objspace, size);
@@ -12645,6 +12675,18 @@ objspace_xrealloc(rb_objspace_t *objspace, void *ptr, size_t new_size, size_t ol
             new_size = 1;
         }
     }
+
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        size_t *size_field = (size_t*)ptr - 1;
+        size_t recorded_size = *size_field;
+        void *start = (void*)size_field;
+        printf("objspace_xrealloc(%p, %zu, %zu), start: %p, recorded size: %zu\n", ptr, new_size, old_size, start, recorded_size);
+        void *new_start = mmtk_realloc_with_old_size(start, new_size + sizeof(size_t), recorded_size + sizeof(size_t));
+        void *new_offsetted = rb_mmtk_make_offsetted(new_start, new_size);
+        return new_offsetted;
+    }
+#endif
 
 #if CALC_EXACT_MALLOC_SIZE
     {
@@ -12738,6 +12780,17 @@ objspace_xfree(rb_objspace_t *objspace, void *ptr, size_t old_size)
          */
         return;
     }
+
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        size_t *size_field= (size_t*)ptr - 1;
+        size_t recorded_size = *size_field;
+        void *start = (void*)size_field;
+        printf("objspace_xfree(%p, %zu), start: %p, recorded size: %zu\n", ptr, old_size, start, recorded_size);
+        return mmtk_free_with_size(start, recorded_size + sizeof(size_t));
+    }
+#endif
+
 #if CALC_EXACT_MALLOC_SIZE
     struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
     ptr = info;
@@ -12836,6 +12889,15 @@ ruby_xmalloc2_body(size_t n, size_t size)
 static void *
 objspace_xcalloc(rb_objspace_t *objspace, size_t size)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        void *mem = mmtk_counted_calloc(1, size + sizeof(size_t));
+        void *offsetted = rb_mmtk_make_offsetted(mem, size);
+        printf("objspace_xcalloc(%zu) = %p\n", size, offsetted);
+        return offsetted;
+    }
+#endif
+
     void *mem;
 
     size = objspace_malloc_prepare(objspace, size);
