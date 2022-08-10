@@ -2547,6 +2547,9 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
         switch (RB_BUILTIN_TYPE(obj)) {
+        case T_STRING:
+        case T_ARRAY:
+        case T_HASH:
         case T_DATA:
         case T_FILE:
         case T_SYMBOL:
@@ -12426,15 +12429,20 @@ objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_siz
     if (rb_mmtk_enabled_p()) {
         if (new_size > old_size) {
             mmtk_increase_vm_alloc_bytes_by(new_size - old_size);
+            size_t vm_alloc_size = mmtk_get_vm_alloc_bytes();
+            printf("Increased VM alloc by %zu bytes. Total %zu bytes\n", new_size - old_size, vm_alloc_size);
 
             // xmalloc may be called before threads are initialized.
             // Do not poll until threads are initialized.
             if (rb_mmtk_threads_are_initialized()) {
+                printf("Polling for GC...\n");
                 mmtk_gc_poll((MMTk_VMMutatorThread)GET_THREAD());
             }
         } else {
             // Note: underflow is handled in MMTk.
             mmtk_decrease_vm_alloc_bytes_by(old_size - new_size);
+            size_t vm_alloc_size = mmtk_get_vm_alloc_bytes();
+            printf("Decreased VM alloc by %zu bytes. Total %zu bytes\n", old_size - new_size, vm_alloc_size);
         }
     }
 #endif
@@ -15315,6 +15323,7 @@ rb_mmtk_scan_object_ruby_style(void *object)
 
 static void
 rb_mmtk_obj_free(void *object) {
+    printf("Called back from Finalization.  Freeing %p\n", object);
     obj_free(&rb_objspace, (VALUE)object);
 }
 
