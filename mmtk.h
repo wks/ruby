@@ -76,6 +76,13 @@ extern void mmtk_post_alloc(MMTk_Mutator mutator, void* refer,
     size_t bytes, int32_t semantics);
 
 /**
+ * Manual allocation accounting
+ */
+extern void mmtk_increase_vm_alloc_bytes_by(size_t size);
+extern void mmtk_decrease_vm_alloc_bytes_by(size_t size);
+extern size_t mmtk_get_vm_alloc_bytes();
+
+/**
  * Tracing
  */
 extern bool mmtk_is_live_object(void* ref);
@@ -90,6 +97,8 @@ extern void mmtk_flush_mark_buffer(MMTk_VMMutatorThread tls);
 extern bool mmtk_will_never_move(void* object);
 extern void mmtk_handle_user_collection_request(MMTk_VMMutatorThread tls);
 extern const char* mmtk_plan_name();
+extern void mmtk_gc_poll(MMTk_VMMutatorThread tls);
+
 
 /**
  * VM Accounting

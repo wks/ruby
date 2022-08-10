@@ -12414,9 +12414,31 @@ objspace_malloc_increase_report(rb_objspace_t *objspace, void *mem, size_t new_s
     return false;
 }
 
+#if USE_MMTK
+static inline bool
+rb_mmtk_threads_are_initialized(void);
+#endif
+
 static bool
 objspace_malloc_increase_body(rb_objspace_t *objspace, void *mem, size_t new_size, size_t old_size, enum memop_type type)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        if (new_size > old_size) {
+            mmtk_increase_vm_alloc_bytes_by(new_size - old_size);
+
+            // xmalloc may be called before threads are initialized.
+            // Do not poll until threads are initialized.
+            if (rb_mmtk_threads_are_initialized()) {
+                mmtk_gc_poll((MMTk_VMMutatorThread)GET_THREAD());
+            }
+        } else {
+            // Note: underflow is handled in MMTk.
+            mmtk_decrease_vm_alloc_bytes_by(old_size - new_size);
+        }
+    }
+#endif
+
     if (new_size > old_size) {
         ATOMIC_SIZE_ADD(malloc_increase, new_size - old_size);
 #if RGENGC_ESTIMATE_OLDMALLOC
@@ -14959,6 +14981,7 @@ struct RubyMMTKGlobal {
     size_t stopped_ractors;
     size_t start_the_world_count;
     struct RubyMMTKThreadIterator thread_iter;
+    rb_atomic_t threads_initialized;
 } rb_mmtk_global = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
     .cond_world_stopped = PTHREAD_COND_INITIALIZER,
@@ -14970,6 +14993,7 @@ struct RubyMMTKGlobal {
         .num_threads = 0,
         .cursor = 0,
     },
+    .threads_initialized = 0,
 };
 
 struct rb_mmtk_address_buffer {
@@ -15015,6 +15039,15 @@ rb_gc_init_collection(void)
     rb_thread_t *cur_thread = GET_THREAD();
     mmtk_initialize_collection((void*)cur_thread);
     cur_thread->mutator = mmtk_bind_mutator((MMTk_VMMutatorThread)cur_thread);
+
+    // Since mutator is initialized, we can now call mmtk_gc_poll.
+    RUBY_ATOMIC_SET(rb_mmtk_global.threads_initialized, 1);
+}
+
+static inline bool
+rb_mmtk_threads_are_initialized(void)
+{
+    return rb_mmtk_global.threads_initialized == 1;
 }
 
 static inline void*
