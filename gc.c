@@ -4802,7 +4802,7 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
                 RUBY_DEBUG_LOG("Resurrected for obj_free: %p: %s %s",
                         resurrected,
                         rb_type_str(RB_BUILTIN_TYPE(obj)),
-                        klass==0?"(null)":rb_class2name(klass)
+                        CLASS_OF(obj)==0?"(null)":rb_class2name(CLASS_OF(obj))
                         );
             }
             if (rb_obj_is_thread(obj)) {
@@ -12607,7 +12607,7 @@ objspace_xmalloc0(rb_objspace_t *objspace, size_t size)
     if (rb_mmtk_enabled_p()) {
         void *mem = mmtk_counted_malloc(size + sizeof(size_t));
         void *offsetted = rb_mmtk_make_offsetted(mem, size);
-        RUBY_DEBUG_LOG(__func__ "(objspace, %zu) = %p\n", size, offsetted);
+        RUBY_DEBUG_LOG("(objspace, %zu) = %p\n", size, offsetted);
         return offsetted;
     }
 #endif
@@ -12681,7 +12681,7 @@ objspace_xrealloc(rb_objspace_t *objspace, void *ptr, size_t new_size, size_t ol
         size_t *size_field = (size_t*)ptr - 1;
         size_t recorded_size = *size_field;
         void *start = (void*)size_field;
-        RUBY_DEBUG_LOG(__func__ "(objspace, %p, %zu, %zu), start: %p, recorded size: %zu\n",
+        RUBY_DEBUG_LOG("(objspace, %p, %zu, %zu), start: %p, recorded size: %zu\n",
                        ptr, new_size, old_size, start, recorded_size);
         void *new_start = mmtk_realloc_with_old_size(start, new_size + sizeof(size_t), recorded_size + sizeof(size_t));
         void *new_offsetted = rb_mmtk_make_offsetted(new_start, new_size);
@@ -12787,7 +12787,7 @@ objspace_xfree(rb_objspace_t *objspace, void *ptr, size_t old_size)
         size_t *size_field= (size_t*)ptr - 1;
         size_t recorded_size = *size_field;
         void *start = (void*)size_field;
-        RUBY_DEBUG_LOG(__func__ "(objspace, %p, %zu), start: %p, recorded size: %zu\n",
+        RUBY_DEBUG_LOG("(objspace, %p, %zu), start: %p, recorded size: %zu\n",
                        ptr, old_size, start, recorded_size);
         return mmtk_free_with_size(start, recorded_size + sizeof(size_t));
     }
@@ -12895,7 +12895,7 @@ objspace_xcalloc(rb_objspace_t *objspace, size_t size)
     if (rb_mmtk_enabled_p()) {
         void *mem = mmtk_counted_calloc(1, size + sizeof(size_t));
         void *offsetted = rb_mmtk_make_offsetted(mem, size);
-        RUBY_DEBUG_LOG(__func__ "(objspace, %zu) = %p\n", size, offsetted);
+        RUBY_DEBUG_LOG("(objspace, %zu) = %p\n", size, offsetted);
         return offsetted;
     }
 #endif
@@ -15138,8 +15138,8 @@ static void
 rb_mmtk_wait_until_ractors_stopped(void *unused)
 {
     while (rb_mmtk_global.stopped_ractors < 1) {
-        RUBY_DEBUG_LOG("Will wait for 1 ractor to stop. cur: %zu, expected: %zu",
-                rb_mmtk_global.stopped_ractors, 1);
+        RUBY_DEBUG_LOG("Will wait for 1 ractor to stop. cur: %zu, expected: 1",
+                rb_mmtk_global.stopped_ractors);
         pthread_cond_wait(&rb_mmtk_global.cond_world_stopped, &rb_mmtk_global.mutex);
     }
 }
@@ -15189,7 +15189,7 @@ rb_mmtk_block_for_gc_internal(void *unused)
 
     while (rb_mmtk_global.start_the_world_count < my_count + 1) {
         RUBY_DEBUG_LOG("Will wait for cond. cur: %zu, expected: %zu",
-                rb_mmtk_global.start_the_world_count, ctx->my_count + 1);
+                rb_mmtk_global.start_the_world_count, my_count + 1);
         pthread_cond_wait(&rb_mmtk_global.cond_world_started, &rb_mmtk_global.mutex);
     }
 
