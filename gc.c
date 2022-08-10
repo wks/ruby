@@ -12595,6 +12595,51 @@ rb_mmtk_make_offsetted(void *mem, size_t size)
     void *offsetted = (void*)(size_field + 1);
     return offsetted;
 }
+
+static inline void *
+rb_mmtk_xmalloc(size_t size)
+{
+    void *start = mmtk_counted_malloc(size + sizeof(size_t));
+    void *offsetted = rb_mmtk_make_offsetted(start, size);
+    RUBY_DEBUG_LOG("(%zu) = %p, start: %p\n", size, offsetted, start);
+    return offsetted;
+}
+
+static inline void *
+rb_mmtk_xcalloc(size_t size)
+{
+    void *start = mmtk_counted_calloc(1, size + sizeof(size_t));
+    void *offsetted = rb_mmtk_make_offsetted(start, size);
+    RUBY_DEBUG_LOG("(%zu) = %p, start: %p\n", size, offsetted, start);
+    return offsetted;
+}
+
+static inline void *
+rb_mmtk_xrealloc(void *ptr, size_t new_size)
+{
+    size_t *size_field = (size_t*)ptr - 1;
+    size_t recorded_size = *size_field;
+    void *start = (void*)size_field;
+    void *new_start = mmtk_realloc_with_old_size(start, new_size + sizeof(size_t), recorded_size + sizeof(size_t));
+    void *new_offsetted = rb_mmtk_make_offsetted(new_start, new_size);
+    RUBY_DEBUG_LOG("(%p, %zu) = %p, start: %p, recorded size: %zu, new_start: %p\n",
+                    ptr, new_size, new_offsetted, start, recorded_size, new_start);
+    return new_offsetted;
+}
+
+static inline void
+rb_mmtk_xfree(void *ptr)
+{
+    if (ptr == NULL) {
+        return;
+    }
+    size_t *size_field= (size_t*)ptr - 1;
+    size_t recorded_size = *size_field;
+    void *start = (void*)size_field;
+    RUBY_DEBUG_LOG("(%p), start: %p, recorded size: %zu\n",
+                    ptr, start, recorded_size);
+    mmtk_free_with_size(start, recorded_size + sizeof(size_t));
+}
 #endif
 
 /* these shouldn't be called directly.
@@ -12605,10 +12650,7 @@ objspace_xmalloc0(rb_objspace_t *objspace, size_t size)
 {
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        void *mem = mmtk_counted_malloc(size + sizeof(size_t));
-        void *offsetted = rb_mmtk_make_offsetted(mem, size);
-        RUBY_DEBUG_LOG("(objspace, %zu) = %p\n", size, offsetted);
-        return offsetted;
+        return rb_mmtk_xmalloc(size);
     }
 #endif
 
@@ -12678,14 +12720,7 @@ objspace_xrealloc(rb_objspace_t *objspace, void *ptr, size_t new_size, size_t ol
 
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        size_t *size_field = (size_t*)ptr - 1;
-        size_t recorded_size = *size_field;
-        void *start = (void*)size_field;
-        RUBY_DEBUG_LOG("(objspace, %p, %zu, %zu), start: %p, recorded size: %zu\n",
-                       ptr, new_size, old_size, start, recorded_size);
-        void *new_start = mmtk_realloc_with_old_size(start, new_size + sizeof(size_t), recorded_size + sizeof(size_t));
-        void *new_offsetted = rb_mmtk_make_offsetted(new_start, new_size);
-        return new_offsetted;
+        return rb_mmtk_xrealloc(ptr, new_size);
     }
 #endif
 
@@ -12774,6 +12809,13 @@ rb_malloc_info_show_results(void)
 static void
 objspace_xfree(rb_objspace_t *objspace, void *ptr, size_t old_size)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        rb_mmtk_xfree(ptr);
+        return;
+    }
+#endif
+
     if (!ptr) {
         /*
          * ISO/IEC 9899 says "If ptr is a null pointer, no action occurs" since
@@ -12781,17 +12823,6 @@ objspace_xfree(rb_objspace_t *objspace, void *ptr, size_t old_size)
          */
         return;
     }
-
-#if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
-        size_t *size_field= (size_t*)ptr - 1;
-        size_t recorded_size = *size_field;
-        void *start = (void*)size_field;
-        RUBY_DEBUG_LOG("(objspace, %p, %zu), start: %p, recorded size: %zu\n",
-                       ptr, old_size, start, recorded_size);
-        return mmtk_free_with_size(start, recorded_size + sizeof(size_t));
-    }
-#endif
 
 #if CALC_EXACT_MALLOC_SIZE
     struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
@@ -12893,10 +12924,7 @@ objspace_xcalloc(rb_objspace_t *objspace, size_t size)
 {
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        void *mem = mmtk_counted_calloc(1, size + sizeof(size_t));
-        void *offsetted = rb_mmtk_make_offsetted(mem, size);
-        RUBY_DEBUG_LOG("(objspace, %zu) = %p\n", size, offsetted);
-        return offsetted;
+        return rb_mmtk_xcalloc(size);
     }
 #endif
 
@@ -13006,6 +13034,12 @@ rb_xcalloc_mul_add_mul(size_t x, size_t y, size_t z, size_t w) /* x * y + z * w 
 void *
 ruby_mimmalloc(size_t size)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        return rb_mmtk_xmalloc(size);
+    }
+#endif
+
     void *mem;
 #if CALC_EXACT_MALLOC_SIZE
     size += sizeof(struct malloc_obj_info);
@@ -13034,6 +13068,12 @@ ruby_mimmalloc(size_t size)
 void
 ruby_mimfree(void *ptr)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        rb_mmtk_xfree(ptr);
+        return;
+    }
+#endif
 #if CALC_EXACT_MALLOC_SIZE
     struct malloc_obj_info *info = (struct malloc_obj_info *)ptr - 1;
     ptr = info;
