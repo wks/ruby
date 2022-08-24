@@ -3037,6 +3037,7 @@ mark_local_storage_i(VALUE local, void *data)
 void
 rb_execution_context_mark(const rb_execution_context_t *ec)
 {
+    printf("Marking VM stack...\n");
     /* mark VM stack */
     if (ec->vm_stack) {
         VM_ASSERT(ec->cfp);
@@ -3071,6 +3072,8 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
         }
     }
 
+    printf("Marking machine stack...\n");
+
     /* mark machine stack */
     if (ec->machine.stack_start && ec->machine.stack_end && (
 #if USE_MMTK
@@ -3078,11 +3081,16 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
 #endif
             ec != GET_EC() /* marked for current ec at the first stage of marking */
     )) {
+        printf("Will run rb_gc_mark_machine_stack...\n");
         rb_gc_mark_machine_stack(ec);
+        printf("Will run rb_gc_mark_locations... %p to %p\n", (VALUE *)&ec->machine.regs,
+            (VALUE *)(&ec->machine.regs) + sizeof(ec->machine.regs) / (sizeof(VALUE)) );
         rb_gc_mark_locations((VALUE *)&ec->machine.regs,
                              (VALUE *)(&ec->machine.regs) +
                              sizeof(ec->machine.regs) / (sizeof(VALUE)));
     }
+
+    printf("Marking others...\n");
 
     RUBY_MARK_UNLESS_NULL(ec->errinfo);
     RUBY_MARK_UNLESS_NULL(ec->root_svar);
@@ -3092,6 +3100,8 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
     RUBY_MARK_UNLESS_NULL(ec->local_storage_recursive_hash);
     RUBY_MARK_UNLESS_NULL(ec->local_storage_recursive_hash_for_trace);
     RUBY_MARK_UNLESS_NULL(ec->private_const_reference);
+
+    printf("Done marking EC...\n");
 }
 
 void rb_fiber_mark_self(rb_fiber_t *fib);

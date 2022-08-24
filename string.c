@@ -1548,6 +1548,11 @@ str_new_frozen_buffer(VALUE klass, VALUE orig, int copy_encoding)
 
     if (copy_encoding) rb_enc_cr_str_exact_copy(str, orig);
     OBJ_FREEZE(str);
+
+    if (rb_mmtk_enabled_p() && !mmtk_is_mmtk_object((void*)str)) {
+      printf("Error: str = %p is not mmtk object\n", (void*)str);
+      exit(5);
+    }
     return str;
 }
 

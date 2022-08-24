@@ -4772,6 +4772,13 @@ rb_mmtk_call_finalizer_inner(rb_objspace_t *objspace, VALUE obj, bool on_exit) {
         }
     }
     obj_free(objspace, obj);
+
+    // The object may contain dangling pointers after `obj_free`.
+    // Clear its flags field to ensure the GC does not attempt to scan it.
+    RVALUE *v = RANY(obj);
+    v->as.free.flags = 0;
+    v->as.free.next = NULL;
+
     RUBY_DEBUG_LOG("Object freed: %p: %s", resurrected, rb_type_str(RB_BUILTIN_TYPE(obj)));
 }
 
@@ -6818,12 +6825,15 @@ ruby_stack_check(void)
     return stack_check(GET_EC(), STACKFRAME_FOR_CALL_CFUNC);
 }
 
+static const VALUE* current_location;
+
 ATTRIBUTE_NO_ADDRESS_SAFETY_ANALYSIS(static void each_location(rb_objspace_t *objspace, register const VALUE *x, register long n, void (*cb)(rb_objspace_t *, VALUE)));
 static void
 each_location(rb_objspace_t *objspace, register const VALUE *x, register long n, void (*cb)(rb_objspace_t *, VALUE))
 {
     VALUE v;
     while (n--) {
+        current_location = x;
         v = *x;
         cb(objspace, v);
         x++;
@@ -7182,6 +7192,7 @@ each_machine_stack_value(const rb_execution_context_t *ec, void (*cb)(rb_objspac
     VALUE *stack_start, *stack_end;
 
     GET_STACK_BOUNDS(stack_start, stack_end, 0);
+    printf("Stack bound: %p to %p\n", stack_start, stack_end);
     each_stack_location(objspace, ec, stack_start, stack_end, cb);
 }
 
@@ -7217,6 +7228,13 @@ rb_mark_tbl_no_pin(st_table *tbl)
     mark_tbl_no_pin(&rb_objspace, tbl);
 }
 
+bool rb_mmtk_is_parser(void *obj);
+
+void wow(void *loc, void *obj) {
+                printf("Wow! Parser at %p: %p\n", loc, obj);
+
+}
+
 static void
 gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
 {
@@ -7231,6 +7249,9 @@ gc_mark_maybe(rb_objspace_t *objspace, VALUE obj)
           case T_NONE:
             break;
           default:
+            if (rb_mmtk_is_parser((void*)obj)) {
+                wow((void*)current_location, (void*)obj);
+            }
             gc_mark_and_pin(objspace, obj);
             break;
         }
@@ -15363,6 +15384,10 @@ rb_mmtk_scan_object_ruby_style(void *object)
     gc_mark_children(objspace, obj);
 }
 
+bool
+rb_mmtk_is_parser(void *object);
+
+
 RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
     rb_mmtk_get_gc_thread_tls,
@@ -15376,6 +15401,7 @@ RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_thread_roots,
     rb_mmtk_scan_thread_root,
     rb_mmtk_scan_object_ruby_style,
+    rb_mmtk_is_parser,
 };
 
 // Use up to 80% of memory for the heap

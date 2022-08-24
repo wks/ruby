@@ -48,6 +48,7 @@ typedef struct {
     void (*scan_thread_roots)(void);
     void (*scan_thread_root)(MMTk_VMMutatorThread mutator, MMTk_VMWorkerThread worker);
     void (*scan_object_ruby_style)(void *object);
+    bool (*is_parser)(void *object);
 } RubyUpcalls;
 
 /**
