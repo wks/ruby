@@ -7418,6 +7418,9 @@ static inline void
 rb_mmtk_mark_pin(VALUE obj);
 #endif
 
+VALUE g_parent;
+bool has_parent;
+
 static inline void
 gc_mark_and_pin(rb_objspace_t *objspace, VALUE obj)
 {
@@ -7428,6 +7431,10 @@ gc_mark_and_pin(rb_objspace_t *objspace, VALUE obj)
     }
 #endif
     if (!is_markable_object(objspace, obj)) return;
+    fprintf(stderr, "[marking]     child %p (pinned)\n", (void*)obj);
+    if (has_parent && RB_BUILTIN_TYPE(g_parent) == RUBY_T_IMEMO) {
+        //abort();
+    }
     gc_pin(objspace, obj);
     gc_mark_ptr(objspace, obj);
 }
@@ -7442,6 +7449,7 @@ gc_mark(rb_objspace_t *objspace, VALUE obj)
     }
 #endif
     if (!is_markable_object(objspace, obj)) return;
+    fprintf(stderr, "[marking]     child %p\n", (void*)obj);
     gc_mark_ptr(objspace, obj);
 }
 
@@ -7570,7 +7578,39 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
 }
 
 static void
+gc_mark_children1(rb_objspace_t *objspace, VALUE obj);
+
+static void
 gc_mark_children(rb_objspace_t *objspace, VALUE obj)
+{
+    has_parent = true;
+    g_parent = obj;
+    enum ruby_value_type builtin_type = RB_BUILTIN_TYPE(obj);
+    const char *type_name = rb_type_str(RB_BUILTIN_TYPE(obj));
+    fprintf(stderr, "[marking] gc_mark_children: %p 0x%02x %s", (void*)obj,
+        builtin_type, type_name);
+    if (builtin_type == T_IMEMO) {
+        enum imemo_type ity = imemo_type(obj);
+        const char *iname = rb_imemo_name(ity);
+        fprintf(stderr, " 0x%02x (%s)", ity, iname);
+    }
+    fprintf(stderr, "\n");
+    gc_mark_children1(objspace, obj);
+
+    has_parent = false;
+    g_parent = Qfalse;
+    fprintf(stderr, "[marking] end_gc_mark_children: %p 0x%02x %s", (void*)obj,
+        builtin_type, type_name);
+    if (builtin_type == T_IMEMO) {
+        enum imemo_type ity = imemo_type(obj);
+        const char *iname = rb_imemo_name(ity);
+        fprintf(stderr, " 0x%02x (%s)", ity, iname);
+    }
+    fprintf(stderr, "\n");
+}
+
+static void
+gc_mark_children1(rb_objspace_t *objspace, VALUE obj)
 {
     register RVALUE *any = RANY(obj);
     gc_mark_set_parent(objspace, obj);
@@ -7852,6 +7892,7 @@ rb_mmtk_assert_mmtk_worker();
 static void
 gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
 {
+    fprintf(stderr, "[marking] gc_mark_root\n");
     struct gc_list *list;
     rb_execution_context_t *ec;
     rb_vm_t *vm;
@@ -7951,6 +7992,8 @@ gc_mark_roots(rb_objspace_t *objspace, const char **categoryp)
 
     MARK_CHECKPOINT("finish");
 #undef MARK_CHECKPOINT
+
+    fprintf(stderr, "[marking] end_gc_mark_root\n");
 }
 
 #if RGENGC_CHECK_MODE >= 4
