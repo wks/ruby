@@ -10425,6 +10425,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
     gc_report(4, objspace, "update-refs: %p ->\n", (void *)obj);
 
+    if (FL_TEST(obj, FL_EXIVAR)) {
+        rb_update_generic_ivar(obj);
+    }
+
     switch (BUILTIN_TYPE(obj)) {
       case T_CLASS:
       case T_MODULE:

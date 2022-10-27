@@ -1034,7 +1034,7 @@ gen_ivtbl_mark(const struct gen_ivtbl *ivtbl)
     uint32_t i;
 
     for (i = 0; i < ivtbl->numiv; i++) {
-        rb_gc_mark(ivtbl->ivptr[i]);
+        rb_gc_mark_movable(ivtbl->ivptr[i]);
     }
 }
 
@@ -1045,6 +1045,26 @@ rb_mark_generic_ivar(VALUE obj)
 
     if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
         gen_ivtbl_mark(ivtbl);
+    }
+}
+
+static void
+gen_ivtbl_update(struct gen_ivtbl *ivtbl)
+{
+    uint32_t i;
+
+    for (i = 0; i < ivtbl->numiv; i++) {
+        ivtbl->ivptr[i] = rb_gc_location(ivtbl->ivptr[i]);
+    }
+}
+
+void
+rb_update_generic_ivar(VALUE obj)
+{
+    struct gen_ivtbl *ivtbl;
+
+    if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
+        gen_ivtbl_update(ivtbl);
     }
 }
 
