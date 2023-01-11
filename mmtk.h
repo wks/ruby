@@ -67,6 +67,8 @@ typedef struct MMTk_RubyUpcalls {
     void (*scan_thread_roots)(void);
     void (*scan_thread_root)(MMTk_VMMutatorThread mutator_tls, MMTk_VMWorkerThread worker_tls);
     void (*scan_object_ruby_style)(MMTk_ObjectReference object);
+    const char *(*object_type_str)(MMTk_ObjectReference object);
+    const char *(*detail_type_str)(MMTk_ObjectReference object);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {
@@ -167,5 +169,7 @@ MMTk_ObjectReference mmtk_get_finalized_object(void);
 struct MMTk_RawVecOfObjRef mmtk_get_all_finalizers(void);
 
 void mmtk_free_raw_vec_of_obj_ref(struct MMTk_RawVecOfObjRef raw_vec);
+
+void mmtk_register_ppp(MMTk_ObjectReference object);
 
 #endif /* MMTK_H */

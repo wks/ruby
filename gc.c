@@ -2635,6 +2635,45 @@ maybe_register_finalizable(VALUE obj) {
                BUILTIN_TYPE(obj), (void*)obj, RBASIC(obj)->flags);
     }
 }
+
+static inline bool
+rb_mmtk_is_ppp(VALUE obj) {
+    RUBY_ASSERT(!rb_special_const_p(obj));
+
+    // Some objects have un-update-able fields.  Those fields pin their children during GC.
+    // We'll register them with MMTk.
+    if (FL_TEST(obj, FL_EXIVAR)) {
+        return false;
+    }
+
+    switch (RB_BUILTIN_TYPE(obj)) {
+      case T_DATA:
+        return true;
+      case T_IMEMO:
+        switch (imemo_type(obj)) {
+          case imemo_iseq:
+          case imemo_tmpbuf:
+          case imemo_ast:
+          case imemo_ifunc:
+          case imemo_memo:
+          case imemo_parser_strterm:
+            return true;
+          default:
+            return false;
+        }
+      default:
+        return false;
+    }
+}
+
+static inline void
+maybe_register_ppp(VALUE obj) {
+    RUBY_ASSERT(!rb_special_const_p(obj));
+
+    if (rb_mmtk_is_ppp(obj)) {
+        mmtk_register_ppp((MMTk_ObjectReference)obj);
+    }
+}
 #endif
 
 static inline VALUE
@@ -2653,6 +2692,7 @@ newobj_init(VALUE klass, VALUE flags, int wb_protected, rb_objspace_t *objspace,
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
         maybe_register_finalizable(obj);
+        maybe_register_ppp(obj);
     }
 #endif
 
@@ -15600,6 +15640,29 @@ rb_mmtk_scan_object_ruby_style(MMTk_ObjectReference object)
     gc_mark_children(objspace, obj);
 }
 
+static const char*
+rb_mmtk_obj_type_name(MMTk_ObjectReference objref) {
+    VALUE obj = (VALUE) objref;
+    return rb_builtin_type_name(BUILTIN_TYPE(obj));
+}
+
+static const char*
+rb_mmtk_detail_type_name(MMTk_ObjectReference objref) {
+    VALUE obj = (VALUE) objref;
+    switch (BUILTIN_TYPE(obj)) {
+        case T_IMEMO:
+            return rb_imemo_name(imemo_type(obj));
+        case T_DATA:
+            if (RTYPEDDATA_P(obj)) {
+                return RTYPEDDATA_TYPE(obj)->wrap_struct_name;
+            } else {
+                return "(old-style data)";
+            }
+        default:
+            return "(no details)";
+    }
+}
+
 MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_init_gc_worker_thread,
     rb_mmtk_get_gc_thread_tls,
@@ -15613,6 +15676,8 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_thread_roots,
     rb_mmtk_scan_thread_root,
     rb_mmtk_scan_object_ruby_style,
+    rb_mmtk_obj_type_name,
+    rb_mmtk_detail_type_name,
 };
 
 // Use up to 80% of memory for the heap
