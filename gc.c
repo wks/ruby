@@ -15364,10 +15364,11 @@ rb_gc_init_collection(void)
 }
 
 static inline MMTk_ObjectReference
-rb_mmtk_call_object_closure(MMTk_ObjectReference object) {
+rb_mmtk_call_object_closure(MMTk_ObjectReference object, bool pin) {
     return rb_mmtk_gc_thread_tls->object_closure.c_function(rb_mmtk_gc_thread_tls->object_closure.rust_closure,
                                                             rb_mmtk_gc_thread_tls->gc_context,
-                                                            object);
+                                                            object,
+                                                            pin);
 }
 
 static void
@@ -15608,7 +15609,7 @@ rb_mmtk_mark(VALUE obj, bool pin)
         (void*)obj);
 
     if (!RB_SPECIAL_CONST_P(obj)) {
-        rb_mmtk_call_object_closure((MMTk_ObjectReference)obj);
+        rb_mmtk_call_object_closure((MMTk_ObjectReference)obj, pin);
     }
 }
 
