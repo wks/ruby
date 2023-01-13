@@ -1224,6 +1224,29 @@ struct RZombie {
 
 #define RZOMBIE(o) ((struct RZombie *)(o))
 
+#if USE_MMTK
+// When using MMTk, this is the alternative to RZombie.
+// MMTk_FinalJob instances are allocated with xmalloc,
+// and do not reuse the space of dead heap objects.
+struct MMTk_FinalJob {
+    struct MMTk_FinalJob *next;
+    enum {
+        MMTK_FJOB_DFREE,
+        MMTK_FJOB_FINALIZE,
+    } kind;
+    union {
+        struct {
+            void (*dfree)(void *);
+            void *data;
+        } dfree;
+        struct {
+            VALUE observed_id;
+            VALUE finalizer_array;
+        } finalize;
+    } as;
+};
+#endif
+
 #define nomem_error GET_VM()->special_exceptions[ruby_error_nomemory]
 
 #if RUBY_MARK_FREE_DEBUG
@@ -1684,9 +1707,19 @@ check_rvalue_consistency(const VALUE obj)
 }
 #endif
 
+#if USE_MMTK
+static inline bool rb_mmtk_object_moved_p(VALUE obj);
+#endif
+
 static inline int
 gc_object_moved_p(rb_objspace_t * objspace, VALUE obj)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        return rb_mmtk_object_moved_p(obj);
+    }
+#endif
+
     if (RB_SPECIAL_CONST_P(obj)) {
         return FALSE;
     }
@@ -2606,8 +2639,8 @@ maybe_register_finalizable(VALUE obj) {
       case T_STRUCT:
       case T_SYMBOL:
       case T_IMEMO:
-        mmtk_add_finalizer((MMTk_ObjectReference)obj);
-        RUBY_DEBUG_LOG("Object registered for finalization: %p: %s %s",
+        mmtk_add_obj_free_candidate((MMTk_ObjectReference)obj);
+        RUBY_DEBUG_LOG("Object registered for obj_free: %p: %s %s",
             (MMTk_ObjectReference)obj,
             rb_type_str(RB_BUILTIN_TYPE(obj)),
             rb_obj_class(obj)==0?"(null)":rb_class2name(rb_obj_class(obj))
@@ -3646,50 +3679,79 @@ rb_cc_table_free(VALUE klass)
     cc_table_free(&rb_objspace, klass, TRUE);
 }
 
+#if USE_MMTK
+static inline void rb_mmtk_push_final_job(struct MMTk_FinalJob *job)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+
+    VALUE prev, next = heap_pages_deferred_final;
+    do {
+        prev = next;
+        job->next = (struct MMTk_FinalJob*)next;
+        next = RUBY_ATOMIC_VALUE_CAS(heap_pages_deferred_final, prev, (VALUE)job);
+    } while (next != prev);
+}
+
+static inline void
+rb_mmtk_make_dfree_job(void (*dfree)(void *), void *data)
+{
+    struct MMTk_FinalJob *job = (struct MMTk_FinalJob*)xmalloc(sizeof(struct MMTk_FinalJob));
+    job->kind = MMTK_FJOB_DFREE;
+    job->as.dfree.dfree = dfree;
+    job->as.dfree.data = data;
+    rb_mmtk_push_final_job(job);
+}
+
+static inline void
+rb_mmtk_make_finalize_job(VALUE obj, VALUE finalizer_array)
+{
+    struct MMTk_FinalJob *job = (struct MMTk_FinalJob*)xmalloc(sizeof(struct MMTk_FinalJob));
+    job->kind = MMTK_FJOB_FINALIZE;
+
+    VALUE observed_id = Qnil;
+    if (FL_TEST(obj, FL_SEEN_OBJ_ID)) {
+        // obj is technically dead already,
+        // but finalizer_table is processed before obj_to_id_table,
+        // so the cached ID is still in the table.
+        observed_id = rb_obj_id(obj);
+    }
+
+    job->as.finalize.observed_id = observed_id;
+    job->as.finalize.finalizer_array = finalizer_array;
+
+    rb_mmtk_push_final_job(job);
+}
+#endif
+
 static inline void
 make_zombie(rb_objspace_t *objspace, VALUE obj, void (*dfree)(void *), void *data)
 {
-    struct RZombie *zombie;
-
 #if USE_MMTK
-    // Zombies are for deferred jobs of cleaning up non-GC resources. It is not
-    // necessry to manage zombies with GC, although there is no problem using GC,
-    // either.
-    //
-    // We will eventually eliminate object resurrection. When that happens,
-    // obj will have been recycled.
-    //
-    // Changing the shape (class) of an object may also introduce race between
-    // mutators and the GC.
+    // When using MMTk, we assume `make_zombie` is called for creating dfree jobs, only.
+    // We removed the code path in `obj_free` that calls `make_zombie` for finalizable objects,
+    // in which case `dfree` is null.
     if (rb_mmtk_enabled_p()) {
-        zombie = (struct RZombie*)xmalloc(sizeof(struct RZombie));
-    } else {
-#endif
-        zombie = RZOMBIE(obj);
-#if USE_MMTK
+        RUBY_ASSERT(dfree != NULL);
+        rb_mmtk_make_dfree_job(dfree, data);
+        return;
     }
 #endif
 
+    struct RZombie *zombie = RZOMBIE(obj);
     zombie->basic.flags = T_ZOMBIE | (zombie->basic.flags & FL_SEEN_OBJ_ID);
     zombie->dfree = dfree;
     zombie->data = data;
     VALUE prev, next = heap_pages_deferred_final;
     do {
         zombie->next = prev = next;
-        next = RUBY_ATOMIC_VALUE_CAS(heap_pages_deferred_final, prev, (VALUE)zombie);
+        next = RUBY_ATOMIC_VALUE_CAS(heap_pages_deferred_final, prev, obj);
     } while (next != prev);
 
-#if USE_MMTK
-    // With MMTk, we decouple deferred jobs from memory management.
-    if (!rb_mmtk_enabled_p()) {
-#endif
     struct heap_page *page = GET_HEAP_PAGE(obj);
     page->final_slots++;
     heap_pages_final_slots++;
-#if USE_MMTK
-    }
-#endif
 }
+
 
 static inline void
 make_io_zombie(rb_objspace_t *objspace, VALUE obj)
@@ -3735,6 +3797,10 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         break;
     }
 
+#if USE_MMTK
+    /* If MMTk is enabled, we process generic ivar table and the ID tables in bulk. */
+    if (!rb_mmtk_enabled_p()) {
+#endif
     if (FL_TEST(obj, FL_EXIVAR)) {
         rb_free_generic_ivar((VALUE)obj);
         FL_UNSET(obj, FL_EXIVAR);
@@ -3743,6 +3809,9 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
     if (FL_TEST(obj, FL_SEEN_OBJ_ID) && !FL_TEST(obj, FL_FINALIZE)) {
         obj_free_object_id(objspace, obj);
     }
+#if USE_MMTK
+    }
+#endif
 
 #if USE_MMTK
     if (!rb_mmtk_enabled_p()) {
@@ -4069,6 +4138,12 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
                BUILTIN_TYPE(obj), (void*)obj, RBASIC(obj)->flags);
     }
 
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        // MMTk handles FL_FINALIZE when scanning the finalizer_table.
+        return TRUE;
+    } else
+#endif
     if (FL_TEST(obj, FL_FINALIZE)) {
         make_zombie(objspace, obj, 0, 0);
         return FALSE;
@@ -4675,7 +4750,16 @@ run_finalizer(rb_objspace_t *objspace, VALUE obj, VALUE table)
         ec->errinfo = saved.errinfo)
 
     saved.errinfo = ec->errinfo;
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        // When using MMTk, we pass the observed ID directly as the `obj` parameter.
+        saved.objid = obj;
+    } else {
+#endif
     saved.objid = rb_obj_id(obj);
+#if USE_MMTK
+    }
+#endif
     saved.cfp = ec->cfp;
     saved.finished = 0;
     saved.final = Qundef;
@@ -4710,33 +4794,52 @@ run_final(rb_objspace_t *objspace, VALUE zombie)
     }
 }
 
+#if USE_MMTK
+static void
+rb_mmtk_finalize_list(struct MMTk_FinalJob *job_list) {
+    struct MMTk_FinalJob *job = job_list;
+    while (job != NULL) {
+        switch (job->kind) {
+            case MMTK_FJOB_DFREE: {
+                job->as.dfree.dfree(job->as.dfree.data);
+                break;
+            }
+            case MMTK_FJOB_FINALIZE: {
+                run_finalizer(&rb_objspace,
+                              job->as.finalize.observed_id,
+                              job->as.finalize.finalizer_array);
+                break;
+            }
+        }
+
+        struct MMTk_FinalJob *next = job->next;
+        xfree(job);
+        job = next;
+    }
+}
+#endif
+
 static void
 finalize_list(rb_objspace_t *objspace, VALUE zombie)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        rb_mmtk_finalize_list((struct MMTk_FinalJob *)zombie);
+        return;
+    }
+#endif
+
     while (zombie) {
         VALUE next_zombie;
+        struct heap_page *page;
         asan_unpoison_object(zombie, false);
         next_zombie = RZOMBIE(zombie)->next;
-
-        struct heap_page *page;
-#if USE_MMTK
-        const bool mmtk_enabled_local = rb_mmtk_enabled_p(); // Allows control-flow sensitive analysis of page
-        if (!mmtk_enabled_local) {
-#endif
-            page = GET_HEAP_PAGE(zombie);
-#if USE_MMTK
-        }
-#endif
+        page = GET_HEAP_PAGE(zombie);
 
         run_final(objspace, zombie);
 
         RB_VM_LOCK_ENTER();
         {
-#if USE_MMTK
-            if (!mmtk_enabled_local) {
-#endif
-            // TODO: will probably need to re-enable this section when we
-            // implement object/ID bijective mappings
             GC_ASSERT(BUILTIN_TYPE(zombie) == T_ZOMBIE);
             if (FL_TEST(zombie, FL_SEEN_OBJ_ID)) {
                 obj_free_object_id(objspace, zombie);
@@ -4749,20 +4852,9 @@ finalize_list(rb_objspace_t *objspace, VALUE zombie)
             page->final_slots--;
             page->free_slots++;
             heap_page_add_freeobj(objspace, page, zombie);
-#if USE_MMTK
-            }
-#endif
-
             objspace->profile.total_freed_objects++;
         }
         RB_VM_LOCK_LEAVE();
-
-#if USE_MMTK
-        if (mmtk_enabled_local) {
-            // When using MMTk, we allocated zombie with xmalloc.  It needs to be freed here.
-            xfree((void*)zombie);
-        }
-#endif
 
         zombie = next_zombie;
     }
@@ -4825,8 +4917,8 @@ force_chain_object(st_data_t key, st_data_t val, st_data_t arg)
 bool rb_obj_is_main_ractor(VALUE gv);
 
 #if USE_MMTK
-void
-rb_mmtk_call_finalizer_inner(rb_objspace_t *objspace, VALUE obj, bool on_exit) {
+static void
+rb_mmtk_call_obj_free_inner(rb_objspace_t *objspace, VALUE obj, bool on_exit) {
     if (on_exit) {
         if (rb_obj_is_thread(obj)) {
             RUBY_DEBUG_LOG("Skipped thread: %p: %s", (void*)obj, rb_type_str(RB_BUILTIN_TYPE(obj)));
@@ -4857,30 +4949,36 @@ rb_mmtk_call_finalizer_inner(rb_objspace_t *objspace, VALUE obj, bool on_exit) {
     v->as.free.next = NULL;
 }
 
-void
-rb_mmtk_call_finalizer(rb_objspace_t *objspace, bool on_exit)
+static void
+rb_mmtk_call_obj_free_on_exit(rb_objspace_t *objspace)
 {
-    if (on_exit) {
-        struct MMTk_RawVecOfObjRef resurrrected_objs = mmtk_get_all_finalizers();
+    struct MMTk_RawVecOfObjRef resurrrected_objs = mmtk_get_all_obj_free_candidates();
 
-        for (size_t i = 0; i < resurrrected_objs.len; i++) {
-            void *resurrected = resurrrected_objs.ptr[resurrrected_objs.len - i - 1];
+    for (size_t i = 0; i < resurrrected_objs.len; i++) {
+        void *resurrected = resurrrected_objs.ptr[resurrrected_objs.len - i - 1];
 
-            VALUE obj = (VALUE)resurrected;
-            rb_mmtk_call_finalizer_inner(objspace, obj, on_exit);
-        }
-
-        mmtk_free_raw_vec_of_obj_ref(resurrrected_objs);
-    } else {
-        void *resurrected;
-        // mmtk_get_finalized_object is thread-safe,
-        // so in theory multiple Ruby threads can poll for resurrected objects concurrently.
-        while ((resurrected = mmtk_get_finalized_object()) != NULL) {
-            VALUE obj = (VALUE)resurrected;
-            rb_mmtk_call_finalizer_inner(objspace, obj, on_exit);
-        }
+        VALUE obj = (VALUE)resurrected;
+        rb_mmtk_call_obj_free_inner(objspace, obj, true);
     }
+
+    mmtk_free_raw_vec_of_obj_ref(resurrrected_objs);
 }
+
+static int
+rb_mmtk_run_finalizers_immediately(st_data_t key, st_data_t value, st_data_t data)
+{
+    VALUE obj = (VALUE)key;
+    VALUE finalizer_array = (VALUE)value;
+    rb_objspace_t *objspace = &rb_objspace;
+
+    VALUE observed_id = rb_obj_id(obj);
+
+    RUBY_DEBUG_LOG("Running finalizer on exits for %p", (void*)obj);
+    run_finalizer(objspace, observed_id, finalizer_array);
+
+    return ST_CONTINUE;
+}
+
 #endif
 
 void
@@ -4888,10 +4986,18 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
 {
     size_t i;
 
+#if USE_MMTK
+    // The following lines are related to Ruby's own GC.
+    // They should not be executedn when using MMTk.
+    if (!rb_mmtk_enabled_p()) {
+#endif
 #if RGENGC_CHECK_MODE >= 2
     gc_verify_internal_consistency(objspace);
 #endif
     gc_rest(objspace);
+#if USE_MMTK
+    }
+#endif
 
     if (ATOMIC_EXCHANGE(finalizing, 1)) return;
 
@@ -4899,14 +5005,33 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
     finalize_deferred(objspace);
     GC_ASSERT(heap_pages_deferred_final == 0);
 
+#if USE_MMTK
+    // The following lines are related to Ruby's own GC.
+    // They should not be executedn when using MMTk.
+    if (!rb_mmtk_enabled_p()) {
+#endif
     gc_rest(objspace);
     /* prohibit incremental GC */
     objspace->flags.dont_incremental = 1;
+#if USE_MMTK
+    }
+#endif
 
 #if USE_MMTK
-    // FIXME: Enable finalizer later.  Objects in finalizer_table are already dead.
-    // We need mmtk-core to support PhantomReference.
-    if (!rb_mmtk_enabled_p()) {
+    if (rb_mmtk_enabled_p()) {
+        // Force to run finalizers, the MMTk style.
+        // When using MMTk, we simply iterate through all elements and call run_finalizer immediately.
+        // The finalizer_table will be freed soon, so we don't need to remove elements.
+        st_foreach(finalizer_table, rb_mmtk_run_finalizers_immediately, 0);
+
+        // TODO: Should we disable GC, too?
+
+        // Running data/file finalizers on exit, the MMTk style.
+        // When using MMTk, we maintain a list of obj_free candidates in the Rust code,
+        // similar to the FinalizerProcessor for JVM which maintains a list of finalizable objects.
+        // But since we are on exit, we call obj_free immediately on those objects instead of in GC.
+        rb_mmtk_call_obj_free_on_exit(objspace);
+    } else {
 #endif
     /* force to run finalizer */
     while (finalizer_table->num_entries) {
@@ -4921,9 +5046,6 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
             xfree(curr);
         }
     }
-#if USE_MMTK
-    }
-#endif
 
     /* prohibit GC because force T_DATA finalizers can break an object graph consistency */
     dont_gc_on();
@@ -4978,8 +5100,6 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
     gc_exit(objspace, gc_enter_event_finalizer, &lock_lev);
 
 #if USE_MMTK
-    if (rb_mmtk_enabled_p()) {
-        rb_mmtk_call_finalizer(objspace, true);
     }
 #endif
 
@@ -10364,6 +10484,12 @@ gc_start_internal(rb_execution_context_t *ec, VALUE self, VALUE full_mark, VALUE
 static int
 gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 {
+#ifdef USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        rb_bug("Function %s should not be called when MMTk is enabled.", RUBY_FUNCTION_NAME_STRING);
+    }
+#endif
+
     GC_ASSERT(!SPECIAL_CONST_P(obj));
 
     switch (BUILTIN_TYPE(obj)) {
@@ -10886,11 +11012,20 @@ check_id_table_move(VALUE value, void *data)
     return ID_TABLE_CONTINUE;
 }
 
+#if USE_MMTK
+static inline VALUE rb_mmtk_maybe_forward(VALUE object);
+#endif
+
 /* Returns the new location of an object, if it moved.  Otherwise returns
  * the existing location. */
 VALUE
 rb_gc_location(VALUE value)
 {
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        return rb_mmtk_maybe_forward(value);
+    }
+#endif
 
     VALUE destination;
 
@@ -15490,12 +15625,9 @@ rb_mmtk_block_for_gc(MMTk_VMMutatorThread tls)
     RB_GC_SAVE_MACHINE_CONTEXT(th);
     rb_mmtk_use_mmtk_global(rb_mmtk_block_for_gc_internal, NULL);
 
-    // Use this opportunity to execute finalizers.
 #if USE_MMTK
     if (rb_mmtk_enabled_p()) {
-        RUBY_DEBUG_LOG("Call finalizers after GC finished...");
-        rb_mmtk_call_finalizer(&rb_objspace, false);
-        RUBY_DEBUG_LOG("Finished calling finalizers.");
+        RUBY_DEBUG_LOG("GC finished.  Mutator resumed.");
     }
 #endif
 }
@@ -15641,6 +15773,182 @@ rb_mmtk_scan_object_ruby_style(MMTk_ObjectReference object)
     gc_mark_children(objspace, obj);
 }
 
+static inline void
+rb_mmtk_call_obj_free(MMTk_ObjectReference object)
+{
+    rb_mmtk_assert_mmtk_worker();
+
+    VALUE obj = (VALUE)object;
+
+    rb_objspace_t *objspace = &rb_objspace;
+    rb_mmtk_call_obj_free_inner(objspace, obj, false);
+}
+
+static inline bool
+rb_mmtk_object_moved_p(VALUE value)
+{
+    if (!SPECIAL_CONST_P(value)) {
+        MMTk_ObjectReference object = (MMTk_ObjectReference)value;
+        return rb_mmtk_call_object_closure(object) == object;
+    } else {
+        return false;
+    }
+}
+
+static inline VALUE
+rb_mmtk_maybe_forward(VALUE value)
+{
+    if (!SPECIAL_CONST_P(value)) {
+        return (VALUE)rb_mmtk_call_object_closure((MMTk_ObjectReference)value);
+    } else {
+        return value;
+    }
+}
+
+typedef void (*rb_mmtk_hash_on_delete_func)(st_data_t, st_data_t, void *arg);
+
+struct rb_mmtk_update_weak_table_context {
+    st_table *old_table;
+    st_table *new_table;
+    bool update_values;
+    rb_mmtk_hash_on_delete_func on_delete;
+    void *on_delete_arg;
+};
+
+static int
+rb_mmtk_update_weak_table_each(st_data_t key, st_data_t value, st_data_t arg)
+{
+    struct rb_mmtk_update_weak_table_context *ctx = (struct rb_mmtk_update_weak_table_context*)arg;
+
+    if (mmtk_is_reachable((MMTk_ObjectReference)key)) {
+        st_data_t new_key = (st_data_t)rb_mmtk_call_object_closure((MMTk_ObjectReference)key);
+        st_data_t new_value = ctx->update_values ?
+            (st_data_t)rb_mmtk_maybe_forward((VALUE)value) : // Note that value may be primitive value or objref.
+            value;
+        st_insert(ctx->new_table, new_key, new_value);
+        RUBY_DEBUG_LOG("Forwarding key-value pair: (%p, %p) -> (%p, %p)",
+            (void*)key, (void*)value, (void*)new_key, (void*)new_value);
+    } else {
+        // The key is dead. Discard the entry.
+        RUBY_DEBUG_LOG("Discarding key-value pair: (%p, %p)",
+            (void*)key, (void*)value);
+        if (ctx->on_delete != NULL) {
+            ctx->on_delete(key, value, ctx->on_delete_arg);
+        }
+    }
+
+    return ST_CONTINUE;
+}
+
+/*
+ * Update a weak hash table after a copying GC finished.
+ * If a key points to a live object, keep the key-value pair, and update the key (and optionally
+ * the value) to point to their new addresses.
+ * If a key points to a dead object, discard the key-value pair.
+ * Because the keys changed, their hashes change as well.
+ * Therefore we rebuild the whole hash table.
+ */
+static void
+rb_mmtk_update_weak_table(st_table **table_holder,
+                          bool update_values,
+                          rb_mmtk_hash_on_delete_func on_delete,
+                          void *on_delete_arg)
+{
+    st_table *old_table = *table_holder;
+
+    if (!old_table || old_table->num_entries == 0) return;
+
+    st_table *new_table = st_init_table(old_table->type);
+
+    struct rb_mmtk_update_weak_table_context ctx = {
+        .old_table = old_table,
+        .new_table = new_table,
+        .update_values = update_values,
+        .on_delete = on_delete,
+        .on_delete_arg = on_delete_arg,
+    };
+    if (st_foreach(old_table, rb_mmtk_update_weak_table_each, (st_data_t)&ctx)) {
+        fprintf(stderr, "Did anything go wrong?");
+        abort();
+    }
+
+    st_free_table(old_table);
+    *table_holder = new_table;
+}
+
+static void
+rb_mmtk_update_weak_table_key_only(st_table **table_holder)
+{
+    rb_mmtk_update_weak_table(table_holder, false, NULL, NULL);
+}
+
+static void
+rb_mmtk_update_weak_table_key_value(st_table **table_holder)
+{
+    rb_mmtk_update_weak_table(table_holder, true, NULL, NULL);
+}
+
+static void
+rb_mmtk_on_finalizer_table_delete(st_data_t key, st_data_t value, void *arg)
+{
+    VALUE obj = (VALUE)key;
+    VALUE finalizer_array = (VALUE)value;
+
+    RUBY_DEBUG_LOG("Making finalizer job for %p", (void*)obj);
+    rb_mmtk_make_finalize_job(obj, finalizer_array);
+}
+
+static void
+rb_mmtk_on_obj_to_id_tbl_delete(st_data_t key, st_data_t value, void *arg)
+{
+#if USE_RUBY_DEBUG_LOG
+    if (RB_FIXNUM_P((VALUE)value)) {
+        RUBY_DEBUG_LOG("Deleting from id_to_obj_tbl: obj=%p, id=%lu)", (void*)key, rb_fix2ulong((VALUE)value));
+    } else {
+        RUBY_DEBUG_LOG("Deleting from id_to_obj_tbl: obj=%p, id=BigNum@%p)", (void*)key, (void*)value);
+    }
+#endif
+    int result = rb_st_delete(rb_objspace.id_to_obj_tbl, &value, NULL);
+    RUBY_ASSERT_ALWAYS(result != 0);
+}
+
+static void
+rb_mmtk_update_global_weak_tables(void)
+{
+    rb_gc_update_generic_iv_tbl(rb_mmtk_update_weak_table_key_only);
+
+    // The macro `finalizer_table` insists on accessing the field via the hard-coded identifier `objspace`.
+    rb_objspace_t *objspace = &rb_objspace;
+
+    // This table maps object addresses to its finalizer functions.
+    // Not all keys point to live objects.
+    // If a key points to a dead object, we make a zombie for it so that their finalizers are
+    // scheduled to be executed later.
+    // Currently finalizers are disabled when running with MMTk.
+    rb_mmtk_update_weak_table(&finalizer_table,
+                              false, // Currently values are pinned.
+                              rb_mmtk_on_finalizer_table_delete,
+                              NULL);
+
+    // Update the obj_to_id_tbl first, and remove dead objects from both
+    // obj_to_id_tbl and id_to_obj_tbl.
+    rb_mmtk_update_weak_table(&rb_objspace.obj_to_id_tbl,
+                              false,
+                              rb_mmtk_on_obj_to_id_tbl_delete,
+                              NULL);
+
+    // Now that dead objects are removed, we forward keys and values now.
+    // This table hashes Fixnum and Bignum by value (object_id_hash_type),
+    // so the hash will not change if the key is Bignum and it is moved.
+    // We can update keys and values in place.
+    gc_update_table_refs(objspace, objspace->id_to_obj_tbl);
+
+    // This table hashes strings by value (rb_str_hash),
+    // so the hash will not change if the key (String) is moved.
+    // We can update keys and values in place.
+    gc_update_table_refs(objspace, global_symbols.str_sym);
+}
+
 static const char*
 rb_mmtk_obj_type_name(MMTk_ObjectReference objref) {
     VALUE obj = (VALUE) objref;
@@ -15677,6 +15985,8 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_scan_thread_roots,
     rb_mmtk_scan_thread_root,
     rb_mmtk_scan_object_ruby_style,
+    rb_mmtk_call_obj_free,
+    rb_mmtk_update_global_weak_tables,
     rb_mmtk_obj_type_name,
     rb_mmtk_detail_type_name,
 };

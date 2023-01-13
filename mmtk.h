@@ -67,6 +67,8 @@ typedef struct MMTk_RubyUpcalls {
     void (*scan_thread_roots)(void);
     void (*scan_thread_root)(MMTk_VMMutatorThread mutator_tls, MMTk_VMWorkerThread worker_tls);
     void (*scan_object_ruby_style)(MMTk_ObjectReference object);
+    void (*call_obj_free)(MMTk_ObjectReference object);
+    void (*update_global_weak_tables)(void);
     const char *(*object_type_str)(MMTk_ObjectReference object);
     const char *(*detail_type_str)(MMTk_ObjectReference object);
 } MMTk_RubyUpcalls;
@@ -140,6 +142,8 @@ size_t mmtk_free_bytes(void);
 
 size_t mmtk_total_bytes(void);
 
+bool mmtk_is_reachable(MMTk_ObjectReference object);
+
 bool mmtk_is_live_object(MMTk_ObjectReference object);
 
 bool mmtk_is_mmtk_object(MMTk_Address addr);
@@ -147,12 +151,6 @@ bool mmtk_is_mmtk_object(MMTk_Address addr);
 void mmtk_modify_check(MMTk_ObjectReference object);
 
 void mmtk_handle_user_collection_request(MMTk_VMMutatorThread tls);
-
-void mmtk_add_weak_candidate(MMTk_ObjectReference reff);
-
-void mmtk_add_soft_candidate(MMTk_ObjectReference reff);
-
-void mmtk_add_phantom_candidate(MMTk_ObjectReference reff);
 
 void mmtk_harness_begin(MMTk_VMMutatorThread tls);
 
@@ -162,11 +160,9 @@ MMTk_Address mmtk_starting_heap_address(void);
 
 MMTk_Address mmtk_last_heap_address(void);
 
-void mmtk_add_finalizer(MMTk_ObjectReference reff);
+void mmtk_add_obj_free_candidate(MMTk_ObjectReference object);
 
-MMTk_ObjectReference mmtk_get_finalized_object(void);
-
-struct MMTk_RawVecOfObjRef mmtk_get_all_finalizers(void);
+struct MMTk_RawVecOfObjRef mmtk_get_all_obj_free_candidates(void);
 
 void mmtk_free_raw_vec_of_obj_ref(struct MMTk_RawVecOfObjRef raw_vec);
 
