@@ -40,6 +40,7 @@
 #if USE_MMTK
 #include "mmtk.h"
 #include "internal/cmdlineopt.h"
+#include <dlfcn.h>
 
 RubyBindingOptions ruby_binding_options;
 MMTk_RubyUpcalls ruby_upcalls;
@@ -15789,7 +15790,7 @@ rb_mmtk_object_moved_p(VALUE value)
 {
     if (!SPECIAL_CONST_P(value)) {
         MMTk_ObjectReference object = (MMTk_ObjectReference)value;
-        return rb_mmtk_call_object_closure(object) == object;
+        return rb_mmtk_call_object_closure(object, false) == object;
     } else {
         return false;
     }
@@ -15799,7 +15800,7 @@ static inline VALUE
 rb_mmtk_maybe_forward(VALUE value)
 {
     if (!SPECIAL_CONST_P(value)) {
-        return (VALUE)rb_mmtk_call_object_closure((MMTk_ObjectReference)value);
+        return (VALUE)rb_mmtk_call_object_closure((MMTk_ObjectReference)value, false);
     } else {
         return value;
     }
@@ -15821,7 +15822,7 @@ rb_mmtk_update_weak_table_each(st_data_t key, st_data_t value, st_data_t arg)
     struct rb_mmtk_update_weak_table_context *ctx = (struct rb_mmtk_update_weak_table_context*)arg;
 
     if (mmtk_is_reachable((MMTk_ObjectReference)key)) {
-        st_data_t new_key = (st_data_t)rb_mmtk_call_object_closure((MMTk_ObjectReference)key);
+        st_data_t new_key = (st_data_t)rb_mmtk_call_object_closure((MMTk_ObjectReference)key, false);
         st_data_t new_value = ctx->update_values ?
             (st_data_t)rb_mmtk_maybe_forward((VALUE)value) : // Note that value may be primitive value or objref.
             value;
@@ -15959,17 +15960,43 @@ static const char*
 rb_mmtk_detail_type_name(MMTk_ObjectReference objref) {
     VALUE obj = (VALUE) objref;
     switch (BUILTIN_TYPE(obj)) {
+        // Known PPP types.
         case T_IMEMO:
             return rb_imemo_name(imemo_type(obj));
         case T_DATA:
             if (RTYPEDDATA_P(obj)) {
                 return RTYPEDDATA_TYPE(obj)->wrap_struct_name;
             } else {
-                return "(old-style data)";
+                Dl_info dl_info;
+                if (dladdr(RDATA(obj)->dmark, &dl_info) != 0) {
+                    return dl_info.dli_sname;
+                } else if (dladdr(RDATA(obj)->dfree, &dl_info) != 0) {
+                    return dl_info.dli_sname;
+                } else {
+                    return "(old-style data, no symbol)";
+                }
             }
+        // Not PPP types, but they are likely to be pinned by PPPs.
+        case T_CLASS: {
+            VALUE name = rb_class_path_cached(obj);
+            if (RTEST(name)) {
+                return rb_str_to_cstr(name);
+            } else {
+                return "(no name)";
+            }
+        }
+        case T_STRING: {
+            return rb_str_to_cstr(obj);
+        }
         default:
             return "(no details)";
     }
+}
+
+static bool
+rb_mmtk_is_exivar(MMTk_ObjectReference obj)
+{
+    return FL_TEST((VALUE)obj, FL_EXIVAR);
 }
 
 MMTk_RubyUpcalls ruby_upcalls = {
@@ -15989,6 +16016,7 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_global_weak_tables,
     rb_mmtk_obj_type_name,
     rb_mmtk_detail_type_name,
+    rb_mmtk_is_exivar,
 };
 
 // Use up to 80% of memory for the heap

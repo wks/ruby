@@ -40,6 +40,10 @@
 #include "ractor_core.h"
 #include "vm_sync.h"
 
+#if USE_MMTK
+#include "mmtk.h"
+#endif
+
 RUBY_EXTERN rb_serial_t ruby_vm_global_cvar_state;
 #define GET_GLOBAL_CVAR_STATE() (ruby_vm_global_cvar_state)
 
@@ -1022,6 +1026,11 @@ generic_ivar_update(st_data_t *k, st_data_t *v, st_data_t u, int existing)
             return ST_STOP;
         }
     }
+#if USE_MMTK
+    if (rb_mmtk_enabled_p() && !FL_TEST(*k, FL_EXIVAR)) {
+        mmtk_register_ppp((MMTk_ObjectReference)(*k));
+    }
+#endif
     FL_SET((VALUE)*k, FL_EXIVAR);
     ivtbl = gen_ivtbl_resize(ivtbl, ivup->shape->next_iv_index);
     // Reinsert in to the hash table because ivtbl might be a newly resized chunk of memory
@@ -1396,6 +1405,11 @@ rb_ensure_generic_iv_list_size(VALUE obj, uint32_t newsize)
         if (UNLIKELY(!gen_ivtbl_get_unlocked(obj, 0, &ivtbl) || newsize > ivtbl->numiv)) {
             ivtbl = gen_ivtbl_resize(ivtbl, newsize);
             st_insert(generic_ivtbl_no_ractor_check(obj), (st_data_t)obj, (st_data_t)ivtbl);
+#if USE_MMTK
+    if (rb_mmtk_enabled_p() && !FL_TEST(obj, FL_EXIVAR)) {
+        mmtk_register_ppp((MMTk_ObjectReference)(obj));
+    }
+#endif
             FL_SET_RAW(obj, FL_EXIVAR);
         }
     }
@@ -1745,6 +1759,11 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
             goto clear;
 
         new_ivtbl = gen_ivtbl_resize(0, obj_ivtbl->numiv);
+#if USE_MMTK
+    if (rb_mmtk_enabled_p() && !FL_TEST(obj, FL_EXIVAR)) {
+        mmtk_register_ppp((MMTk_ObjectReference)(obj));
+    }
+#endif
         FL_SET(clone, FL_EXIVAR);
 
         for (uint32_t i=0; i<obj_ivtbl->numiv; i++) {
@@ -1798,6 +1817,11 @@ rb_replace_generic_ivar(VALUE clone, VALUE obj)
     }
     RB_VM_LOCK_LEAVE();
 
+#if USE_MMTK
+    if (rb_mmtk_enabled_p() && !FL_TEST(clone, FL_EXIVAR)) {
+        mmtk_register_ppp((MMTk_ObjectReference)(clone));
+    }
+#endif
     FL_SET(clone, FL_EXIVAR);
 }
 

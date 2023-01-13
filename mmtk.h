@@ -71,6 +71,7 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_global_weak_tables)(void);
     const char *(*object_type_str)(MMTk_ObjectReference object);
     const char *(*detail_type_str)(MMTk_ObjectReference object);
+    bool (*is_exivar)(MMTk_ObjectReference object);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {
