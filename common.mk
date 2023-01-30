@@ -50,13 +50,7 @@ GEM_PATH =
 GEM_VENDOR =
 
 BENCHMARK_DRIVER_GIT_URL = https://github.com/benchmark-driver/benchmark-driver
-BENCHMARK_DRIVER_GIT_REF = v0.16.0
-SIMPLECOV_GIT_URL = https://github.com/colszowka/simplecov.git
-SIMPLECOV_GIT_REF = v0.17.0
-SIMPLECOV_HTML_GIT_URL = https://github.com/colszowka/simplecov-html.git
-SIMPLECOV_HTML_GIT_REF = v0.10.2
-DOCLIE_GIT_URL = https://github.com/ms-ati/docile.git
-DOCLIE_GIT_REF = v1.3.2
+BENCHMARK_DRIVER_GIT_REF = v0.16.3
 
 STATIC_RUBY   = static-ruby
 
@@ -157,6 +151,7 @@ COMMONOBJS    = array.$(OBJEXT) \
 		vm_sync.$(OBJEXT) \
 		vm_trace.$(OBJEXT) \
 		$(YJIT_OBJ) \
+		$(YJIT_LIBOBJ) \
 		$(COROUTINE_OBJ) \
 		$(DTRACE_OBJ) \
 		$(BUILTIN_ENCOBJS) \
@@ -225,6 +220,7 @@ YJIT_RUSTC_ARGS = --crate-name=yjit \
 	--crate-type=staticlib \
 	--edition=2021 \
 	-g \
+	-C lto=thin \
 	-C opt-level=3 \
 	-C overflow-checks=on \
 	'--out-dir=$(CARGO_TARGET_DIR)/release/' \
@@ -1225,6 +1221,9 @@ $(REVISION_H)$(no_baseruby:no=~disabled~):
 $(REVISION_H)$(yes_baseruby:yes=~disabled~):
 	$(Q) exit > $@
 
+# uncommon.mk: $(REVISION_H)
+# $(MKFILES): $(REVISION_H)
+
 $(srcdir)/ext/ripper/ripper.c: $(srcdir)/ext/ripper/tools/preproc.rb $(srcdir)/parse.y $(srcdir)/defs/id.def $(srcdir)/ext/ripper/depend
 	$(ECHO) generating $@
 	$(Q) $(CHDIR) $(@D) && \
@@ -1321,9 +1320,10 @@ run.gdb:
 	echo '  quit'                         >> run.gdb
 	echo end                              >> run.gdb
 
+GDB = gdb
 
 gdb: miniruby$(EXEEXT) run.gdb PHONY
-	gdb -x run.gdb --quiet --args $(MINIRUBY) $(RUNOPT0) $(TESTRUN_SCRIPT) $(RUNOPT)
+	$(GDB) -x run.gdb --quiet --args $(MINIRUBY) $(RUNOPT0) $(TESTRUN_SCRIPT) $(RUNOPT)
 
 gdb-ruby: $(PROGRAM) run.gdb PHONY
 	$(Q) $(RUNRUBY_COMMAND) $(RUNRUBY_DEBUGGER) -- $(RUNOPT0) $(TESTRUN_SCRIPT) $(RUNOPT)
@@ -1346,7 +1346,7 @@ dist:
 
 up:: update-remote
 
-up::
+up$(DOT_WAIT)::
 	-$(Q)$(MAKE) $(mflags) Q=$(Q) REVISION_FORCE=PHONY ALWAYS_UPDATE_UNICODE= after-update
 
 yes::
@@ -1372,6 +1372,10 @@ update-rubyspec:
 update-config_files: PHONY
 	$(Q) $(BASERUBY) -C "$(srcdir)" tool/downloader.rb -d tool --cache-dir=$(CACHE_DIR) -e gnu \
 	    config.guess config.sub
+
+update-coverage: main PHONY
+	$(XRUBY) -C "$(srcdir)" bin/gem install --no-document \
+		--install-dir .bundle --conservative "simplecov"
 
 refresh-gems: update-bundled_gems prepare-gems
 prepare-gems: $(HAVE_BASERUBY:yes=update-gems) $(HAVE_BASERUBY:yes=extract-gems)
@@ -1399,10 +1403,10 @@ extract-gems$(gnumake:yes=-sequential): PHONY
 	    -e 'gem, ver, _, rev = *$$F' \
 	    -e 'next if !ver or /^#/=~gem' \
 	    -e 'g = "#{gem}-#{ver}"' \
-	    -e 'if File.directory?("#{d}/#{g}")' \
-	    -e 'elsif rev and File.exist?(gs = "gems/src/#{gem}/#{gem}.gemspec")' \
-	    -e   'BundledGem.copy(gs, ".bundle")' \
-	    -e 'else' \
+	    -e 'unless File.directory?("#{d}/#{g}")' \
+	    -e   'if rev and File.exist?(gs = "gems/src/#{gem}/#{gem}.gemspec")' \
+	    -e     'BundledGem.build(gs, ver, "gems")' \
+	    -e   'end' \
 	    -e   'BundledGem.unpack("gems/#{g}.gem", ".bundle")' \
 	    -e 'end' \
 	    gems/bundled_gems
@@ -1468,8 +1472,9 @@ SYNTAX_SUGGEST_SPECS =
 PREPARE_SYNTAX_SUGGEST = test-syntax-suggest-prepare
 test-syntax-suggest: $(TEST_RUNNABLE)-test-syntax-suggest
 yes-test-syntax-suggest: yes-$(PREPARE_SYNTAX_SUGGEST)
-	$(XRUBY) -C $(srcdir) -Ispec/syntax_suggest .bundle/bin/rspec \
-		--require spec_helper $(RSPECOPTS) spec/syntax_suggest/$(SYNTAX_SUGGEST_SPECS)
+	$(XRUBY) -C $(srcdir) -Ispec/syntax_suggest:spec/lib .bundle/bin/rspec \
+		--require spec_helper --require formatter_overrides --require spec_coverage \
+		$(RSPECOPTS) spec/syntax_suggest/$(SYNTAX_SUGGEST_SPECS)
 no-test-syntax-suggest:
 
 check: $(DOT_WAIT) $(TEST_RUNNABLE)-$(PREPARE_SYNTAX_SUGGEST) test-syntax-suggest
@@ -1486,7 +1491,7 @@ yes-test-bundler-prepare: yes-test-bundler-precheck
 		-e 'ENV["BUNDLE_APP_CONFIG"] = File.expand_path(".bundle")' \
 		-e 'ENV["BUNDLE_PATH__SYSTEM"] = "true"' \
 		-e 'ENV["BUNDLE_WITHOUT"] = "lint doc"' \
-		-e 'load "spec/bundler/support/bundle.rb"' -- install --gemfile=tool/bundler/dev_gems.rb
+		-e 'load "spec/bundler/support/bundle.rb"' -- install --quiet --gemfile=tool/bundler/dev_gems.rb
 	$(ACTIONS_ENDGROUP)
 
 RSPECOPTS =
@@ -1497,8 +1502,8 @@ yes-test-bundler: $(PREPARE_BUNDLER)
 	$(gnumake_recursive)$(XRUBY) \
 		-r./$(arch)-fake \
 		-e "exec(*ARGV)" -- \
-		$(XRUBY) -C $(srcdir) -Ispec/bundler .bundle/bin/rspec \
-		--require spec_helper $(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
+		$(XRUBY) -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec \
+		--require spec_helper --require formatter_overrides $(RSPECOPTS) spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler:
 
 PARALLELRSPECOPTS = --runtime-log $(srcdir)/tmp/parallel_runtime_rspec.log
@@ -1511,9 +1516,9 @@ yes-test-bundler-parallel: $(PREPARE_BUNDLER)
 		$(XRUBY) -I$(srcdir)/spec/bundler \
 		-e "ENV['PARALLEL_TESTS_EXECUTABLE'] = ARGV.shift" \
 		-e "load ARGV.shift" \
-		"$(XRUBY) -C $(srcdir) -Ispec/bundler .bundle/bin/rspec" \
+		"$(XRUBY) -C $(srcdir) -Ispec/bundler:spec/lib .bundle/bin/rspec" \
 		$(srcdir)/.bundle/bin/parallel_rspec \
-		-o "--require spec_helper" \
+		-o "--require spec_helper --require formatter_overrides" \
 		$(PARALLELRSPECOPTS) $(srcdir)/spec/bundler/$(BUNDLER_SPECS)
 no-test-bundler-parallel:
 
@@ -1749,12 +1754,14 @@ help: PHONY
 	"  runruby:               runs test.rb by ruby you just built" \
 	"  gdb:                   runs test.rb by miniruby under gdb" \
 	"  gdb-ruby:              runs test.rb by ruby under gdb" \
-	"  check:                 equals make test test-tool test-all test-spec" \
+	"  exam:                  equals make check test-bundler-parallel test-bundled-gems" \
+	"  check:                 equals make test test-tool test-all test-spec test-syntax-suggest" \
 	"  test:                  ruby core tests [BTESTS=<bootstraptest files>]" \
 	"  test-all:              all ruby tests [TESTOPTS=-j4 TESTS=<test files>]" \
 	"  test-spec:             run the Ruby spec suite [SPECOPTS=<specs, opts>]" \
 	"  test-bundler:          run the Bundler spec" \
 	"  test-bundler-parallel: run the Bundler spec with parallel" \
+	"  test-syntax-suggest:   run the SyntaxSuggest spec" \
 	"  test-bundled-gems:     run the test suite of bundled gems" \
 	"  test-tool:             tests under the tool/test" \
 	"  update-gems:           download files of the bundled gems" \
@@ -6129,6 +6136,7 @@ error.$(OBJEXT): {$(VPATH)}constant.h
 error.$(OBJEXT): {$(VPATH)}defines.h
 error.$(OBJEXT): {$(VPATH)}encoding.h
 error.$(OBJEXT): {$(VPATH)}error.c
+error.$(OBJEXT): {$(VPATH)}gc.h
 error.$(OBJEXT): {$(VPATH)}id.h
 error.$(OBJEXT): {$(VPATH)}id_table.h
 error.$(OBJEXT): {$(VPATH)}intern.h

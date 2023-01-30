@@ -2114,6 +2114,10 @@ hash_stlike_lookup(VALUE hash, st_data_t key, st_data_t *pval)
         return ar_lookup(hash, key, pval);
     }
     else {
+        extern st_index_t rb_iseq_cdhash_hash(VALUE);
+        RUBY_ASSERT(RHASH_ST_TABLE(hash)->type->hash == rb_any_hash ||
+                    RHASH_ST_TABLE(hash)->type->hash == rb_ident_hash ||
+                    RHASH_ST_TABLE(hash)->type->hash == rb_iseq_cdhash_hash);
         return st_lookup(RHASH_ST_TABLE(hash), key, pval);
     }
 }
@@ -7056,6 +7060,10 @@ static const rb_data_type_t env_data_type = {
  *    synonyms.keys # => [:hello, :world]
  *
  *  Note that setting the default proc will clear the default value and vice versa.
+ *
+ *  Be aware that a default proc that modifies the hash is not thread-safe in the
+ *  sense that multiple threads can call into the default proc concurrently for the
+ *  same key.
  *
  *  === What's Here
  *

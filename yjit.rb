@@ -195,14 +195,11 @@ module RubyVM::YJIT
 
   # Produce a list of instructions compiled by YJIT for an iseq
   def self.insns_compiled(iseq)
+    return nil unless self.enabled?
+
     # If a method or proc is passed in, get its iseq
     iseq = RubyVM::InstructionSequence.of(iseq)
-
-    if self.enabled?
-      Primitive.rb_yjit_insns_compiled(iseq)
-    else
-      Qnil
-    end
+    Primitive.rb_yjit_insns_compiled(iseq)
   end
 
   # Free and recompile all existing JIT code
@@ -255,6 +252,11 @@ module RubyVM::YJIT
 
       # Number of failed compiler invocations
       compilation_failure = stats[:compilation_failure]
+
+      if stats[:x86_call_rel32] != 0 || stats[:x86_call_reg] != 0
+        $stderr.puts "x86_call_rel32:        " + ("%10d" % stats[:x86_call_rel32])
+        $stderr.puts "x86_call_reg:          " + ("%10d" % stats[:x86_call_reg])
+      end
 
       $stderr.puts "bindings_allocations:  " + ("%10d" % stats[:binding_allocations])
       $stderr.puts "bindings_set:          " + ("%10d" % stats[:binding_set])

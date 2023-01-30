@@ -161,16 +161,6 @@ should_be_T_ARRAY(VALUE ary)
     RARRAY(ary)->as.heap.aux.capa = (n); \
 } while (0)
 
-#define ARY_SET_SHARED(ary, value) do { \
-    const VALUE _ary_ = (ary); \
-    const VALUE _value_ = (value); \
-    assert(!ARY_EMBED_P(_ary_)); \
-    assert(ARY_SHARED_P(_ary_)); \
-    assert(!OBJ_FROZEN(_ary_)); \
-    assert(ARY_SHARED_ROOT_P(_value_) || OBJ_FROZEN(_value_)); \
-    RB_OBJ_WRITE(_ary_, &RARRAY(_ary_)->as.heap.aux.shared_root, _value_); \
-} while (0)
-
 #define ARY_SHARED_ROOT_OCCUPIED(ary) (!OBJ_FROZEN(ary) && ARY_SHARED_ROOT_REFCNT(ary) == 1)
 #define ARY_SET_SHARED_ROOT_REFCNT(ary, value) do { \
     assert(ARY_SHARED_ROOT_P(ary)); \
@@ -643,10 +633,15 @@ rb_ary_increment_share(VALUE shared_root)
 static void
 rb_ary_set_shared(VALUE ary, VALUE shared_root)
 {
+    assert(!ARY_EMBED_P(ary));
+    assert(!OBJ_FROZEN(ary));
+    assert(ARY_SHARED_ROOT_P(shared_root) || OBJ_FROZEN(shared_root));
+
     rb_ary_increment_share(shared_root);
     FL_SET_SHARED(ary);
+    RB_OBJ_WRITE(ary, &RARRAY(ary)->as.heap.aux.shared_root, shared_root);
+
     RB_DEBUG_COUNTER_INC(obj_ary_shared_create);
-    ARY_SET_SHARED(ary, shared_root);
 }
 
 static inline void
@@ -1082,10 +1077,7 @@ ary_make_shared(VALUE ary)
 
         ARY_SET_LEN(shared, capa);
         ary_mem_clear(shared, len, capa - len);
-        ARY_SET_SHARED_ROOT_REFCNT(shared, 1);
-        FL_SET_SHARED(ary);
-        RB_DEBUG_COUNTER_INC(obj_ary_shared_create);
-        ARY_SET_SHARED(ary, shared);
+        rb_ary_set_shared(ary, shared);
 
         ary_verify(shared);
         ary_verify(ary);
@@ -5564,17 +5556,6 @@ ary_make_hash_by(VALUE ary)
     return ary_add_hash_by(hash, ary);
 }
 
-static inline void
-ary_recycle_hash(VALUE hash)
-{
-    assert(RBASIC_CLASS(hash) == 0);
-    if (RHASH_ST_TABLE_P(hash)) {
-        st_table *tbl = RHASH_ST_TABLE(hash);
-        st_free_table(tbl);
-        RHASH_ST_CLEAR(hash);
-    }
-}
-
 /*
  *  call-seq:
  *    array - other_array -> new_array
@@ -5616,7 +5597,7 @@ rb_ary_diff(VALUE ary1, VALUE ary2)
         if (rb_hash_stlike_lookup(hash, RARRAY_AREF(ary1, i), NULL)) continue;
         rb_ary_push(ary3, rb_ary_elt(ary1, i));
     }
-    ary_recycle_hash(hash);
+
     return ary3;
 }
 
@@ -5722,7 +5703,6 @@ rb_ary_and(VALUE ary1, VALUE ary2)
             rb_ary_push(ary3, v);
         }
     }
-    ary_recycle_hash(hash);
 
     return ary3;
 }
@@ -5809,11 +5789,11 @@ rb_ary_union_hash(VALUE hash, VALUE ary2)
 static VALUE
 rb_ary_or(VALUE ary1, VALUE ary2)
 {
-    VALUE hash, ary3;
+    VALUE hash;
 
     ary2 = to_ary(ary2);
     if (RARRAY_LEN(ary1) + RARRAY_LEN(ary2) <= SMALL_ARRAY_LEN) {
-        ary3 = rb_ary_new();
+        VALUE ary3 = rb_ary_new();
         rb_ary_union(ary3, ary1);
         rb_ary_union(ary3, ary2);
         return ary3;
@@ -5822,9 +5802,7 @@ rb_ary_or(VALUE ary1, VALUE ary2)
     hash = ary_make_hash(ary1);
     rb_ary_union_hash(hash, ary2);
 
-    ary3 = rb_hash_values(hash);
-    ary_recycle_hash(hash);
-    return ary3;
+    return rb_hash_values(hash);
 }
 
 /*
@@ -5848,7 +5826,7 @@ rb_ary_union_multi(int argc, VALUE *argv, VALUE ary)
 {
     int i;
     long sum;
-    VALUE hash, ary_union;
+    VALUE hash;
 
     sum = RARRAY_LEN(ary);
     for (i = 0; i < argc; i++) {
@@ -5857,7 +5835,7 @@ rb_ary_union_multi(int argc, VALUE *argv, VALUE ary)
     }
 
     if (sum <= SMALL_ARRAY_LEN) {
-        ary_union = rb_ary_new();
+        VALUE ary_union = rb_ary_new();
 
         rb_ary_union(ary_union, ary);
         for (i = 0; i < argc; i++) rb_ary_union(ary_union, argv[i]);
@@ -5868,9 +5846,7 @@ rb_ary_union_multi(int argc, VALUE *argv, VALUE ary)
     hash = ary_make_hash(ary);
     for (i = 0; i < argc; i++) rb_ary_union_hash(hash, argv[i]);
 
-    ary_union = rb_hash_values(hash);
-    ary_recycle_hash(hash);
-    return ary_union;
+    return rb_hash_values(hash);
 }
 
 /*
@@ -5924,7 +5900,6 @@ rb_ary_intersect_p(VALUE ary1, VALUE ary2)
             break;
         }
     }
-    ary_recycle_hash(hash);
 
     return result;
 }
@@ -6359,7 +6334,6 @@ rb_ary_uniq_bang(VALUE ary)
     }
     ary_resize_capa(ary, hash_size);
     rb_hash_foreach(hash, push_value, ary);
-    ary_recycle_hash(hash);
 
     return ary;
 }
@@ -6403,9 +6377,6 @@ rb_ary_uniq(VALUE ary)
     else {
         hash = ary_make_hash(ary);
         uniq = rb_hash_values(hash);
-    }
-    if (hash) {
-        ary_recycle_hash(hash);
     }
 
     return uniq;

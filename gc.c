@@ -157,9 +157,9 @@ MMTk_RubyUpcalls ruby_upcalls;
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-#if USE_MMTK
 static bool mmtk_enable = false;
-static const char *mmtk_env_plan = NULL;
+
+#if USE_MMTK
 static const char *mmtk_pre_arg_plan = NULL;
 static const char *mmtk_post_arg_plan = NULL;
 static const char *mmtk_chosen_plan = NULL;
@@ -770,6 +770,7 @@ typedef struct rb_objspace {
         unsigned int dont_incremental : 1;
         unsigned int during_gc : 1;
         unsigned int during_compacting : 1;
+        unsigned int during_reference_updating : 1;
         unsigned int gc_stressful: 1;
         unsigned int has_hook: 1;
         unsigned int during_minor_gc : 1;
@@ -1257,8 +1258,7 @@ VALUE rb_mGC;
 int ruby_disable_gc = 0;
 int ruby_enable_autocompact = 0;
 
-void rb_iseq_mark(const rb_iseq_t *iseq);
-void rb_iseq_update_references(rb_iseq_t *iseq);
+void rb_iseq_mark_and_update(rb_iseq_t *iseq, bool referece_updating);
 void rb_iseq_free(const rb_iseq_t *iseq);
 size_t rb_iseq_memsize(const rb_iseq_t *iseq);
 void rb_vm_update_references(void *ptr);
@@ -7630,6 +7630,9 @@ rb_mmtk_mark_movable(VALUE obj);
 
 static inline void
 rb_mmtk_mark_pin(VALUE obj);
+
+static inline void
+rb_mmtk_mark_and_move(VALUE *field);
 #endif
 
 static inline void
@@ -7669,6 +7672,30 @@ void
 rb_gc_mark(VALUE ptr)
 {
     gc_mark_and_pin(&rb_objspace, ptr);
+}
+
+void
+rb_gc_mark_and_move(VALUE *ptr)
+{
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        rb_mmtk_mark_and_move(ptr);
+        return;
+    }
+#endif
+
+    rb_objspace_t *objspace = &rb_objspace;
+    if (RB_SPECIAL_CONST_P(*ptr)) return;
+
+    if (UNLIKELY(objspace->flags.during_reference_updating)) {
+        GC_ASSERT(objspace->flags.during_compacting);
+        GC_ASSERT(during_gc);
+
+        *ptr = rb_gc_location(*ptr);
+    }
+    else {
+        gc_mark_ptr(objspace, *ptr);
+    }
 }
 
 /* CAUTION: THIS FUNCTION ENABLE *ONLY BEFORE* SWEEPING.
@@ -7745,7 +7772,7 @@ gc_mark_imemo(rb_objspace_t *objspace, VALUE obj)
         mark_method_entry(objspace, &RANY(obj)->as.imemo.ment);
         return;
       case imemo_iseq:
-        rb_iseq_mark((rb_iseq_t *)obj);
+        rb_iseq_mark_and_update((rb_iseq_t *)obj, false);
         return;
       case imemo_tmpbuf:
         {
@@ -7834,6 +7861,8 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
             gc_mark(objspace, RCLASS_IVPTR(obj)[i]);
         }
         mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
+
+        gc_mark(objspace, RCLASS_EXT(obj)->classpath);
         break;
 
       case T_ICLASS:
@@ -10962,7 +10991,7 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
         gc_ref_update_method_entry(objspace, &RANY(obj)->as.imemo.ment);
         break;
       case imemo_iseq:
-        rb_iseq_update_references((rb_iseq_t *)obj);
+        rb_iseq_mark_and_update((rb_iseq_t *)obj, true);
         break;
       case imemo_ast:
         rb_ast_update_references((rb_ast_t *)obj);
@@ -11205,6 +11234,8 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
         update_class_ext(objspace, RCLASS_EXT(obj));
         update_const_tbl(objspace, RCLASS_CONST_TBL(obj));
+
+        UPDATE_IF_MOVED(objspace, RCLASS_EXT(obj)->classpath);
         break;
 
       case T_ICLASS:
@@ -11255,16 +11286,18 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 #if USE_RVARGC
                 VALUE new_root = any->as.string.as.heap.aux.shared;
                 rb_str_update_shared_ary(obj, old_root, new_root);
-
-                // if, after move the string is not embedded, and can fit in the
-                // slot it's been placed in, then re-embed it
-                if (rb_gc_obj_slot_size(obj) >= rb_str_size_as_embedded(obj)) {
-                    if (!STR_EMBED_P(obj) && rb_str_reembeddable_p(obj)) {
-                        rb_str_make_embedded(obj);
-                    }
-                }
 #endif
             }
+
+#if USE_RVARGC
+            /* If, after move the string is not embedded, and can fit in the
+             * slot it's been placed in, then re-embed it. */
+            if (rb_gc_obj_slot_size(obj) >= rb_str_size_as_embedded(obj)) {
+                if (!STR_EMBED_P(obj) && rb_str_reembeddable_p(obj)) {
+                    rb_str_make_embedded(obj);
+                }
+            }
+#endif
 
             break;
         }
@@ -11403,6 +11436,8 @@ extern rb_symbols_t ruby_global_symbols;
 static void
 gc_update_references(rb_objspace_t *objspace)
 {
+    objspace->flags.during_reference_updating = true;
+
     rb_execution_context_t *ec = GET_EC();
     rb_vm_t *vm = rb_ec_vm_ptr(ec);
 
@@ -11435,6 +11470,8 @@ gc_update_references(rb_objspace_t *objspace)
     gc_update_table_refs(objspace, objspace->id_to_obj_tbl);
     gc_update_table_refs(objspace, global_symbols.str_sym);
     gc_update_table_refs(objspace, finalizer_table);
+
+    objspace->flags.during_reference_updating = false;
 }
 
 #if GC_CAN_COMPILE_COMPACTION
@@ -15175,6 +15212,9 @@ gc_using_rvargc_p(VALUE mod)
 static VALUE
 rb_mmtk_plan_name(VALUE _)
 {
+    if (!rb_mmtk_enabled_p()) {
+        rb_raise(rb_eRuntimeError, "Debug harness can only be used when MMTk is enabled, re-run with --mmtk.");
+    }
     const char* plan_name = mmtk_plan_name();
     return rb_str_new(plan_name, strlen(plan_name));
 }
@@ -15210,6 +15250,9 @@ rb_mmtk_enabled(VALUE _)
 static VALUE
 rb_mmtk_harness_begin(VALUE _)
 {
+    if (!rb_mmtk_enabled_p()) {
+        rb_raise(rb_eRuntimeError, "Debug harness can only be used when MMTk is enabled, re-run with --mmtk.");
+    }
     mmtk_harness_begin((MMTk_VMMutatorThread)GET_THREAD());
     return Qnil;
 }
@@ -15226,6 +15269,9 @@ rb_mmtk_harness_begin(VALUE _)
 static VALUE
 rb_mmtk_harness_end(VALUE _)
 {
+    if (!rb_mmtk_enabled_p()) {
+        rb_raise(rb_eRuntimeError, "Debug harness can only be used when MMTk is enabled, re-run with --mmtk.");
+    }
     mmtk_harness_end((MMTk_VMMutatorThread)GET_THREAD());
     return Qnil;
 }
@@ -15759,6 +15805,19 @@ rb_mmtk_mark_pin(VALUE obj)
 }
 
 static inline void
+rb_mmtk_mark_and_move(VALUE *field)
+{
+    VALUE obj = *field;
+    if (!RB_SPECIAL_CONST_P(obj)) {
+        MMTk_ObjectReference old_ref = (MMTk_ObjectReference)obj;
+        MMTk_ObjectReference new_ref = rb_mmtk_call_object_closure(old_ref);
+        if (new_ref != old_ref) {
+            *field = (VALUE)new_ref;
+        }
+    }
+}
+
+static inline void
 rb_mmtk_scan_object_ruby_style(MMTk_ObjectReference object)
 {
     rb_mmtk_assert_mmtk_worker();
@@ -15881,12 +15940,6 @@ static void
 rb_mmtk_update_weak_table_key_only(st_table **table_holder)
 {
     rb_mmtk_update_weak_table(table_holder, false, NULL, NULL);
-}
-
-static void
-rb_mmtk_update_weak_table_key_value(st_table **table_holder)
-{
-    rb_mmtk_update_weak_table(table_holder, true, NULL, NULL);
 }
 
 static void
@@ -16079,21 +16132,10 @@ rb_mmtk_parse_heap_limit(const char *argv, bool* had_error)
 }
 
 void rb_mmtk_heap_limit(bool *is_dynamic, size_t *min_size, size_t *max_size) {
-    const char *envval;
     if (mmtk_max_heap_size > 0) {
         *is_dynamic = false;
         *min_size = 0;
         *max_size = mmtk_max_heap_size;
-    } else if ((envval = getenv("THIRD_PARTY_HEAP_LIMIT")) != 0) {
-        bool had_error = false;
-        size_t parsed_max = rb_mmtk_parse_heap_limit(envval, &had_error);
-        if (had_error) {
-            fprintf(stderr, "Error: Invalid THIRD_PARTY_HEAP_LIMIT: %s\n", envval);
-            abort();
-        }
-        *is_dynamic = false;
-        *min_size = 0;
-        *max_size = parsed_max;
     } else {
         const size_t default_min = 1024 * 1024;
         size_t default_max = rb_mmtk_available_system_memory() / 100 * rb_mmtk_heap_limit_percentage;
@@ -16117,15 +16159,6 @@ void rb_mmtk_pre_process_opts(int argc, char **argv) {
      */
 
     bool enable_rubyopt = true;
-
-    mmtk_env_plan = getenv("MMTK_PLAN");
-    if (mmtk_env_plan) {
-        mmtk_enable = true;
-    }
-
-    if (getenv("THIRD_PARTY_HEAP_LIMIT")) {
-        mmtk_enable = true;
-    }
 
     for (int n = 1; n < argc; n++) {
         if (strcmp(argv[n], "--") == 0) {
@@ -16226,15 +16259,7 @@ void rb_mmtk_pre_process_opts(int argc, char **argv) {
         }
     }
 
-    if (enable_rubyopt && mmtk_env_plan && mmtk_pre_arg_plan && strcmp(mmtk_env_plan, mmtk_pre_arg_plan) != 0) {
-        fputs("[FATAL] MMTK_PLAN and --mmtk-plan do not agree\n", stderr);
-        exit(EXIT_FAILURE);
-    }
-
-    if (enable_rubyopt && mmtk_env_plan) {
-        mmtk_chosen_plan = mmtk_env_plan;
-    }
-    else if (mmtk_pre_arg_plan) {
+    if (mmtk_pre_arg_plan) {
         mmtk_chosen_plan = mmtk_pre_arg_plan;
     }
     else {
@@ -16281,8 +16306,9 @@ void rb_mmtk_post_process_opts_finish(bool feature_enable) {
     }
 }
 
+#endif
+
 bool rb_mmtk_enabled_p(void) {
     return mmtk_enable;
 }
 
-#endif
