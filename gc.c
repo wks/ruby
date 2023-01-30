@@ -15810,7 +15810,7 @@ rb_mmtk_mark_and_move(VALUE *field)
     VALUE obj = *field;
     if (!RB_SPECIAL_CONST_P(obj)) {
         MMTk_ObjectReference old_ref = (MMTk_ObjectReference)obj;
-        MMTk_ObjectReference new_ref = rb_mmtk_call_object_closure(old_ref);
+        MMTk_ObjectReference new_ref = rb_mmtk_call_object_closure(old_ref, false);
         if (new_ref != old_ref) {
             *field = (VALUE)new_ref;
         }
