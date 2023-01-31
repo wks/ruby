@@ -1346,11 +1346,23 @@ static inline void gc_prof_sweep_timer_stop(rb_objspace_t *);
 static inline void gc_prof_set_malloc_info(rb_objspace_t *);
 static inline void gc_prof_set_heap_info(rb_objspace_t *);
 
+#if USE_MMTK
+static inline VALUE rb_mmtk_maybe_forward(VALUE object);
+
+#define TYPED_UPDATE_IF_MOVED(_objspace, _type, _thing) do { \
+    if (rb_mmtk_enabled_p()) { \
+        *(_type *)&(_thing) = (_type)rb_mmtk_maybe_forward((VALUE)(_thing)); \
+    } else if (gc_object_moved_p((_objspace), (VALUE)(_thing))) {    \
+        *(_type *)&(_thing) = (_type)RMOVED(_thing)->destination; \
+    } \
+} while (0)
+#else
 #define TYPED_UPDATE_IF_MOVED(_objspace, _type, _thing) do { \
     if (gc_object_moved_p((_objspace), (VALUE)(_thing))) {    \
         *(_type *)&(_thing) = (_type)RMOVED(_thing)->destination; \
     } \
 } while (0)
+#endif
 
 #define UPDATE_IF_MOVED(_objspace, _thing) TYPED_UPDATE_IF_MOVED(_objspace, VALUE, _thing)
 
@@ -2685,7 +2697,6 @@ rb_mmtk_is_ppp(VALUE obj) {
         return true;
       case T_IMEMO:
         switch (imemo_type(obj)) {
-          case imemo_iseq:
           case imemo_tmpbuf:
           case imemo_ast:
           case imemo_ifunc:
@@ -11042,10 +11053,6 @@ check_id_table_move(VALUE value, void *data)
     return ID_TABLE_CONTINUE;
 }
 
-#if USE_MMTK
-static inline VALUE rb_mmtk_maybe_forward(VALUE object);
-#endif
-
 /* Returns the new location of an object, if it moved.  Otherwise returns
  * the existing location. */
 VALUE
@@ -15831,6 +15838,7 @@ rb_mmtk_scan_object_ruby_style(MMTk_ObjectReference object)
 
     rb_objspace_t *objspace = &rb_objspace;
     gc_mark_children(objspace, obj);
+    gc_update_object_references(objspace, obj);
 }
 
 static inline void
