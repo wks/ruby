@@ -3616,23 +3616,25 @@ struct cc_tbl_i_data {
 static enum rb_id_table_iterator_result
 cc_table_mark_i(ID id, VALUE ccs_ptr, void *data_ptr)
 {
+    fprintf(stderr, "cc_table_mark_i %p\n", (void*)ccs_ptr);
     struct cc_tbl_i_data *data = data_ptr;
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VM_ASSERT(vm_ccs_p(ccs));
     VM_ASSERT(id == ccs->cme->called_id);
 
     if (METHOD_ENTRY_INVALIDATED(ccs->cme)) {
-        rb_vm_ccs_free(ccs);
+        //rb_vm_ccs_free(ccs);
         return ID_TABLE_DELETE;
     }
     else {
         gc_mark(data->objspace, (VALUE)ccs->cme);
 
         for (int i=0; i<ccs->len; i++) {
-            VM_ASSERT(data->klass == ccs->entries[i].cc->klass);
-            VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
+            //VM_ASSERT(data->klass == ccs->entries[i].cc->klass);
+            //VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
 
             gc_mark(data->objspace, (VALUE)ccs->entries[i].ci);
+            fprintf(stderr, "  mark ccs->entries[%d].cc %p\n", i, ccs->entries[i].cc);
             gc_mark(data->objspace, (VALUE)ccs->entries[i].cc);
         }
         return ID_TABLE_CONTINUE;
@@ -11095,7 +11097,7 @@ update_id_table(VALUE *value, void *data, int existing)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
 
-    if (gc_object_moved_p(objspace, (VALUE)*value)) {
+    if (true || gc_object_moved_p(objspace, (VALUE)*value)) {
         *value = rb_gc_location((VALUE)*value);
     }
 
@@ -11113,20 +11115,23 @@ update_m_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
 static enum rb_id_table_iterator_result
 update_cc_tbl_i(VALUE ccs_ptr, void *data)
 {
+    fprintf(stderr, "update_cc_tbl_i %p\n", (void*)ccs_ptr);
     rb_objspace_t *objspace = (rb_objspace_t *)data;
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VM_ASSERT(vm_ccs_p(ccs));
 
-    if (gc_object_moved_p(objspace, (VALUE)ccs->cme)) {
+    if (true || gc_object_moved_p(objspace, (VALUE)ccs->cme)) {
         ccs->cme = (const rb_callable_method_entry_t *)rb_gc_location((VALUE)ccs->cme);
     }
 
     for (int i=0; i<ccs->len; i++) {
-        if (gc_object_moved_p(objspace, (VALUE)ccs->entries[i].ci)) {
+        if (true || gc_object_moved_p(objspace, (VALUE)ccs->entries[i].ci)) {
             ccs->entries[i].ci = (struct rb_callinfo *)rb_gc_location((VALUE)ccs->entries[i].ci);
         }
-        if (gc_object_moved_p(objspace, (VALUE)ccs->entries[i].cc)) {
-            ccs->entries[i].cc = (struct rb_callcache *)rb_gc_location((VALUE)ccs->entries[i].cc);
+        if (true || gc_object_moved_p(objspace, (VALUE)ccs->entries[i].cc)) {
+            struct rb_callcache * newval = (struct rb_callcache *)rb_gc_location((VALUE)ccs->entries[i].cc);
+            fprintf(stderr, "  updat ccs->entries[%d].cc %p to %p\n", i, ccs->entries[i].cc, newval);
+            ccs->entries[i].cc = newval;
         }
     }
 
@@ -15857,7 +15862,7 @@ rb_mmtk_object_moved_p(VALUE value)
 {
     if (!SPECIAL_CONST_P(value)) {
         MMTk_ObjectReference object = (MMTk_ObjectReference)value;
-        return rb_mmtk_call_object_closure(object, false) == object;
+        return rb_mmtk_call_object_closure(object, false) != object;
     } else {
         return false;
     }

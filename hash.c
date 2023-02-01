@@ -4481,6 +4481,12 @@ rb_ident_hash_new(void)
 {
     VALUE hash = rb_hash_new();
     RHASH_ST_TABLE_SET(hash, st_init_table(&identhash));
+
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        mmtk_register_ppp((MMTk_ObjectReference)hash);
+    }
+#endif
     return hash;
 }
 
@@ -4489,6 +4495,12 @@ rb_ident_hash_new_with_size(st_index_t size)
 {
     VALUE hash = rb_hash_new();
     RHASH_ST_TABLE_SET(hash, st_init_table_with_size(&identhash, size));
+
+#if USE_MMTK
+    if (rb_mmtk_enabled_p()) {
+        mmtk_register_ppp((MMTk_ObjectReference)hash);
+    }
+#endif
     return hash;
 }
 

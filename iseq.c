@@ -320,7 +320,11 @@ rb_iseq_mark_and_update(rb_iseq_t *iseq, bool reference_updating)
                     // We simply skip it if cc is vm_empty_cc.
                     if (!rb_mmtk_enabled_p() || cc != rb_vm_empty_cc()) {
 #endif
+#if USE_MMTK
+                    if (rb_mmtk_enabled_p() || reference_updating) {
+#else
                     if (reference_updating) {
+#endif
                         cc = (const struct rb_callcache *)rb_gc_location((VALUE)cc);
                     }
 
