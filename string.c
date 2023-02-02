@@ -1588,6 +1588,16 @@ rb_str_tmp_new(long len)
 void
 rb_str_free(VALUE str)
 {
+#if USE_MMTK
+    if (!rb_mmtk_enabled_p()) {
+    // Vanilla Ruby deletes string from fstring_table when it is found dead.
+    // This behaves like weak table.
+    // However, with MMTk, rb_str_free is called during weak reference processing,
+    // at which time live objects have been forwarded
+    // but entries of fstring_table are not forwarded, yet.
+    // (Note: fstring_table entries are not marked in rb_vm_mark().)
+    // If we attempt to access fstring_table now, it may encounter un-forwarded references, and crash.
+#endif
     if (FL_TEST(str, RSTRING_FSTR)) {
         st_data_t fstr = (st_data_t)str;
 
@@ -1597,6 +1607,7 @@ rb_str_free(VALUE str)
             RB_DEBUG_COUNTER_INC(obj_str_fstr);
         }
         RB_VM_LOCK_LEAVE();
+    }
     }
 
     if (STR_EMBED_P(str)) {

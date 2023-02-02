@@ -299,7 +299,9 @@ rb_iseq_mark_and_update(rb_iseq_t *iseq, bool reference_updating)
         rb_gc_mark_and_move(&body->variable.script_lines);
         rb_gc_mark_and_move(&body->location.label);
         rb_gc_mark_and_move(&body->location.base_label);
+        fprintf(stderr, "Moving/forwarding pathobj (before) %p, %p\n", &body->location.pathobj, (void*)body->location.pathobj);
         rb_gc_mark_and_move(&body->location.pathobj);
+        fprintf(stderr, "Moving/forwarding pathobj (after)  %p, %p\n", &body->location.pathobj, (void*)body->location.pathobj);
         if (body->local_iseq) rb_gc_mark_and_move_ptr(&body->local_iseq);
         if (body->parent_iseq) rb_gc_mark_and_move_ptr(&body->parent_iseq);
         if (body->mandatory_only_iseq) rb_gc_mark_and_move_ptr(&body->mandatory_only_iseq);

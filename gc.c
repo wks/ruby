@@ -15956,6 +15956,12 @@ rb_mmtk_update_weak_table_key_only(st_table **table_holder)
 }
 
 static void
+rb_mmtk_update_weak_table_key_value(st_table **table_holder)
+{
+    rb_mmtk_update_weak_table(table_holder, true, NULL, NULL);
+}
+
+static void
 rb_mmtk_on_finalizer_table_delete(st_data_t key, st_data_t value, void *arg)
 {
     VALUE obj = (VALUE)key;
@@ -16003,6 +16009,9 @@ rb_mmtk_update_global_weak_tables(void)
                               false,
                               rb_mmtk_on_obj_to_id_tbl_delete,
                               NULL);
+
+    // Update the fstring_table, and remove dead objects.
+    rb_mmtk_update_weak_table_key_value(&GET_VM()->frozen_strings);
 
     // Now that dead objects are removed, we forward keys and values now.
     // This table hashes Fixnum and Bignum by value (object_id_hash_type),
