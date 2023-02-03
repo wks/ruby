@@ -7842,7 +7842,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
     gc_mark_set_parent(objspace, obj);
 
     if (FL_TEST(obj, FL_EXIVAR)) {
-        rb_mark_generic_ivar(obj);
+        rb_mark_and_update_generic_ivar(obj);
     }
 
     switch (BUILTIN_TYPE(obj)) {
@@ -11240,6 +11240,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 
     gc_report(4, objspace, "update-refs: %p ->\n", (void *)obj);
 
+    if (FL_TEST(obj, FL_EXIVAR)) {
+        rb_mark_and_update_generic_ivar(obj);
+    }
+
     switch (BUILTIN_TYPE(obj)) {
       case T_CLASS:
       case T_MODULE:
@@ -13595,6 +13599,7 @@ wmap_free(void *ptr)
     st_foreach(w->obj2wmap, wmap_free_map, 0);
     st_free_table(w->obj2wmap);
     st_free_table(w->wmap2obj);
+    xfree(w);
 }
 
 static int
