@@ -82,7 +82,14 @@ CLONESETUP(VALUE clone, VALUE obj)
 static void
 block_mark(const struct rb_block *block)
 {
-    switch (vm_block_type(block)) {
+#if USE_MMTK
+    // `vm_block_type` does assertions on its children.
+    // But when using MMTk, the children objects may have been moved by now,
+    // and vm_block_type is not aware of this.
+    // We have to get the block type directly like `block_compact` does.
+    enum rb_block_type block_type = rb_mmtk_enabled_p() ? block->type : vm_block_type(block);
+#endif
+    switch (block_type) {
       case block_type_iseq:
       case block_type_ifunc:
         {

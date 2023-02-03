@@ -3620,7 +3620,7 @@ struct cc_tbl_i_data {
 static enum rb_id_table_iterator_result
 cc_table_mark_i(ID id, VALUE ccs_ptr, void *data_ptr)
 {
-    fprintf(stderr, "cc_table_mark_i %p\n", (void*)ccs_ptr);
+    //fprintf(stderr, "cc_table_mark_i %p\n", (void*)ccs_ptr);
     struct cc_tbl_i_data *data = data_ptr;
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VM_ASSERT(vm_ccs_p(ccs));
@@ -3638,7 +3638,7 @@ cc_table_mark_i(ID id, VALUE ccs_ptr, void *data_ptr)
             //VM_ASSERT(vm_cc_check_cme(ccs->entries[i].cc, ccs->cme));
 
             gc_mark(data->objspace, (VALUE)ccs->entries[i].ci);
-            fprintf(stderr, "  mark ccs->entries[%d].cc %p\n", i, ccs->entries[i].cc);
+            //fprintf(stderr, "  mark ccs->entries[%d].cc %p\n", i, ccs->entries[i].cc);
             gc_mark(data->objspace, (VALUE)ccs->entries[i].cc);
         }
         return ID_TABLE_CONTINUE;
@@ -11127,7 +11127,7 @@ update_m_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
 static enum rb_id_table_iterator_result
 update_cc_tbl_i(VALUE ccs_ptr, void *data)
 {
-    fprintf(stderr, "update_cc_tbl_i %p\n", (void*)ccs_ptr);
+    //fprintf(stderr, "update_cc_tbl_i %p\n", (void*)ccs_ptr);
     rb_objspace_t *objspace = (rb_objspace_t *)data;
     struct rb_class_cc_entries *ccs = (struct rb_class_cc_entries *)ccs_ptr;
     VM_ASSERT(vm_ccs_p(ccs));
@@ -11142,7 +11142,7 @@ update_cc_tbl_i(VALUE ccs_ptr, void *data)
         }
         if (true || gc_object_moved_p(objspace, (VALUE)ccs->entries[i].cc)) {
             struct rb_callcache * newval = (struct rb_callcache *)rb_gc_location((VALUE)ccs->entries[i].cc);
-            fprintf(stderr, "  updat ccs->entries[%d].cc %p to %p\n", i, ccs->entries[i].cc, newval);
+            //fprintf(stderr, "  updat ccs->entries[%d].cc %p to %p\n", i, ccs->entries[i].cc, newval);
             ccs->entries[i].cc = newval;
         }
     }
