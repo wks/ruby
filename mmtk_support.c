@@ -933,8 +933,24 @@ rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
 }
 
 static void
-rb_mmtk_move_givtbl(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref) {
+rb_mmtk_move_givtbl(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref)
+{
     rb_mv_generic_ivar((VALUE)old_objref, (VALUE)new_objref);
+}
+
+static void
+rb_mmtk_dump_type(MMTk_ObjectReference object, MMTk_StringClosure closure)
+{
+    VALUE obj = (VALUE)object;
+    const char *ty = rb_type_str(RB_BUILTIN_TYPE(obj));
+
+    closure.c_function(ty, closure.rust_closure);
+}
+
+static void
+rb_mmtk_dump_comment(MMTk_ObjectReference object, MMTk_StringClosure closure)
+{
+    closure.c_function("This is comment", closure.rust_closure);
 }
 
 MMTk_RubyUpcalls ruby_upcalls = {
@@ -957,6 +973,8 @@ MMTk_RubyUpcalls ruby_upcalls = {
     rb_mmtk_update_global_weak_tables,
     rb_mmtk_get_original_givtbl,
     rb_mmtk_move_givtbl,
+    rb_mmtk_dump_type,
+    rb_mmtk_dump_comment,
 };
 
 ////////////////////////////////////////////////////////////////////////////////

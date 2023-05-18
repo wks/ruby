@@ -54,6 +54,23 @@ typedef struct MMTk_GCThreadTLS {
     struct MMTk_ObjectClosure object_closure;
 } MMTk_GCThreadTLS;
 
+typedef void (*StringClosureFunction)(const char *str, void *data);
+
+/**
+ * A closure for C to pass string pointer back to Rust.
+ * It doesn't give Rust the ownership of the C string.  The Rust code should copy the string.
+ */
+typedef struct MMTk_StringClosure {
+    /**
+     * The function to be called from C.
+     */
+    StringClosureFunction c_function;
+    /**
+     * The pointer to the Rust-level closure object.
+     */
+    void *rust_closure;
+} MMTk_StringClosure;
+
 typedef struct MMTk_RubyUpcalls {
     void (*init_gc_worker_thread)(struct MMTk_GCThreadTLS *gc_worker_tls);
     struct MMTk_GCThreadTLS *(*get_gc_thread_tls)(void);
@@ -74,6 +91,8 @@ typedef struct MMTk_RubyUpcalls {
     void (*update_global_weak_tables)(void);
     void *(*get_original_givtbl)(MMTk_ObjectReference object);
     void (*move_givtbl)(MMTk_ObjectReference old_objref, MMTk_ObjectReference new_objref);
+    void (*dump_type)(MMTk_ObjectReference object, struct MMTk_StringClosure closure);
+    void (*dump_comment)(MMTk_ObjectReference object, struct MMTk_StringClosure closure);
 } MMTk_RubyUpcalls;
 
 typedef struct MMTk_RawVecOfObjRef {
