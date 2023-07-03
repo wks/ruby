@@ -674,14 +674,16 @@ rb_mmtk_is_obj_free_candidate(VALUE obj)
         // Just let them leak for now.
         // We'll prioritize eliminating the underlying buffer of ordinary objects.
         return false;
-      case T_MODULE:
-      case T_CLASS:
       case T_STRING:
       case T_ARRAY:
       case T_HASH:
+      case T_MATCH:
+        // Debug: temporarily make them non-candidates to see performance improvement potential.
+       // return false;
+      case T_MODULE:
+      case T_CLASS:
       case T_REGEXP:
       case T_DATA:
-      case T_MATCH:
       case T_FILE:
       case T_ICLASS:
       case T_BIGNUM:

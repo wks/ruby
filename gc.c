@@ -3782,10 +3782,22 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
         (void)RB_DEBUG_COUNTER_INC_IF(obj_class_ptr, BUILTIN_TYPE(obj) == T_CLASS);
         break;
       case T_STRING:
+#if USE_MMTK
+        if (!rb_mmtk_enabled_p()) {
+#endif
         rb_str_free(obj);
+#if USE_MMTK
+        }
+#endif
         break;
       case T_ARRAY:
+#if USE_MMTK
+        if (!rb_mmtk_enabled_p()) {
+#endif
         rb_ary_free(obj);
+#if USE_MMTK
+        }
+#endif
         break;
       case T_HASH:
 #if USE_DEBUG_COUNTER
@@ -3828,13 +3840,18 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
             RB_DEBUG_COUNTER_INC(obj_hash_st);
         }
 #endif
-
+#if USE_MMTK
+        if (!rb_mmtk_enabled_p()) {
+#endif
         if (RHASH_ST_TABLE_P(obj)) {
             st_table *tab = RHASH_ST_TABLE(obj);
 
             if (tab->bins != NULL) free(tab->bins);
             free(tab->entries);
         }
+#if USE_MMTK
+        }
+#endif
         break;
       case T_REGEXP:
         if (RANY(obj)->as.regexp.ptr) {
@@ -3859,10 +3876,16 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
                 RB_DEBUG_COUNTER_INC(obj_match_under4);
             }
 #endif
+#if USE_MMTK
+        if (!rb_mmtk_enabled_p()) {
+#endif
             onig_region_free(&rm->regs, 0);
             if (rm->char_offset)
                 xfree(rm->char_offset);
             xfree(rm);
+#if USE_MMTK
+        }
+#endif
 
             RB_DEBUG_COUNTER_INC(obj_match_ptr);
         }
