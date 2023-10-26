@@ -1501,13 +1501,12 @@ rb_mmtk_scan_roots_in_mutator_thread(MMTk_VMMutatorThread mutator, MMTk_VMWorker
 static void*
 rb_mmtk_get_original_givtbl(MMTk_ObjectReference object) {
     VALUE obj = (VALUE)object;
-    if (FL_TEST(obj, FL_EXIVAR)) {
-        struct gen_ivtbl *ivtbl;
-        if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
-            return ivtbl;
-        } else {
-            return NULL;
-        }
+
+    // The header is already corrupted when forwarding.  We just assume `object` had `FL_EXIVAR`.
+
+    struct gen_ivtbl *ivtbl;
+    if (rb_gen_ivtbl_get(obj, 0, &ivtbl)) {
+        return ivtbl;
     } else {
         return NULL;
     }
