@@ -1188,6 +1188,7 @@ rb_mmtk_define_gc_mmtk_module(void)
     rb_define_singleton_method(rb_mMMTk, "enabled?", rb_mmtk_enabled, 0);
     rb_define_singleton_method(rb_mMMTk, "harness_begin", rb_mmtk_harness_begin, 0);
     rb_define_singleton_method(rb_mMMTk, "harness_end", rb_mmtk_harness_end, 0);
+    rb_define_singleton_method(rb_mMMTk, "print_all_objects", rb_mmtk_print_all_objects, 0);
 }
 
 /*
@@ -1300,6 +1301,19 @@ rb_mmtk_harness_end(VALUE _)
         fprintf(stderr, "======== End vanilla GC timing report (mmtk-ruby) ========\n");
     }
 
+    return Qnil;
+}
+
+/*
+ *  call-seq:
+ *      GC::MMTk.print_all_objects
+ *
+ *  Traverse the heap and print the addresses of all objects.
+ */
+VALUE
+rb_mmtk_print_all_objects(VALUE _)
+{
+    mmtk_print_all_objects();
     return Qnil;
 }
 

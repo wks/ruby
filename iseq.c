@@ -45,6 +45,9 @@
 #include "insns.inc"
 #include "insns_info.inc"
 
+// MMTk conditional compilation macros
+#include "internal/mmtk_macros.h"
+
 VALUE rb_cISeq;
 static VALUE iseqw_new(const rb_iseq_t *iseq);
 static const rb_iseq_t *iseqw_check(VALUE iseqw);
@@ -3989,6 +3992,23 @@ rb_clear_bf_ccs(void)
     rb_objspace_each_objects(clear_bf_ccs_i, NULL);
 }
 
+#if USE_MMTK
+static void
+rb_mmtk_trace_set_i(MMTk_ObjectReference objref, void *data)
+{
+    rb_event_flag_t turnon_events = *(rb_event_flag_t *)data;
+    VALUE v = (VALUE) objref;
+
+    if (rb_obj_is_iseq(v)) {
+        rb_iseq_trace_set(rb_iseq_check((rb_iseq_t *)v), turnon_events);
+    }
+    else if (clear_attr_cc(v)) {
+    }
+    else if (clear_bf_cc(v)) {
+    }
+}
+#endif
+
 static int
 trace_set_i(void *vstart, void *vend, size_t stride, void *data)
 {
@@ -4015,6 +4035,11 @@ trace_set_i(void *vstart, void *vend, size_t stride, void *data)
 void
 rb_iseq_trace_set_all(rb_event_flag_t turnon_events)
 {
+    WHEN_USING_MMTK({
+        mmtk_enumerate_objects(rb_mmtk_trace_set_i, &turnon_events);
+        return;
+    });
+
     rb_objspace_each_objects(trace_set_i, &turnon_events);
 }
 

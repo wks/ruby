@@ -114,6 +114,7 @@ VALUE rb_mmtk_plan_name(VALUE _);
 VALUE rb_mmtk_enabled(VALUE _);
 VALUE rb_mmtk_harness_begin(VALUE _);
 VALUE rb_mmtk_harness_end(VALUE _);
+VALUE rb_mmtk_print_all_objects(VALUE _);
 
 // Debugging
 bool rb_mmtk_is_mmtk_worker(void);
