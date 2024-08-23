@@ -3207,9 +3207,105 @@ objspace_each_objects(rb_objspace_t *objspace, each_obj_callback *callback, void
     objspace_each_exec(protected, &each_obj_data);
 }
 
+#if USE_MMTK
+struct rb_mmtk_build_obj_array_data {
+    VALUE **array_ptr;
+    size_t len;
+    size_t capa;
+};
+
+void
+rb_mmtk_build_obj_array_i(MMTk_ObjectReference object, void *data)
+{
+    struct rb_mmtk_build_obj_array_data *build_array_data = (struct rb_mmtk_build_obj_array_data*)data;
+    VALUE *array = *build_array_data->array_ptr;
+    size_t len = build_array_data->len;
+    size_t capa = build_array_data->capa;
+    if (len == capa) {
+        size_t new_capa = capa * 2;
+        VALUE *new_array = (VALUE*)realloc(array, sizeof(VALUE) * new_capa);
+        *build_array_data->array_ptr = new_array;
+        build_array_data->capa = new_capa;
+        array = new_array;
+    }
+
+    RUBY_ASSERT(build_array_data->len < build_array_data->capa);
+
+    array[len] = (VALUE)object;
+    build_array_data->len = len + 1;
+}
+
+void
+rb_mmtk_each_objects_safe(each_obj_callback *callback, void *data)
+{
+    // Allocate a tmpbuf object.  It's OK if it triggers GC now.
+    volatile VALUE tmpbuf = rb_imemo_tmpbuf_auto_free_pointer();
+
+    // Build an array of object references.
+    const size_t initial_capacity = 512;
+    // We must not trigger GC while running `mmtk_enumerate_objects`,
+    // so we use `malloc` directly.
+    // It will be realloced as we add more objects.
+    VALUE *array = (VALUE*)malloc(sizeof(VALUE) * initial_capacity);
+    struct rb_mmtk_build_obj_array_data build_array_data = {
+        .array_ptr = &array,
+        .len = 0,
+        .capa = initial_capacity,
+    };
+
+    // No GC from now on.
+    mmtk_enumerate_objects(rb_mmtk_build_obj_array_i, &build_array_data);
+
+    // Root the array.
+    rb_imemo_tmpbuf_set_ptr(tmpbuf, array);
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->cnt = build_array_data.len;
+    // GC is OK from now on.
+
+    // Inform the VM about malloc memory usage.
+    // Since elements of `array` are rooted by `tmpbuf`, it is safe to trigger GC.
+    // The GC won't free any object because we have just rooted every object.
+    // But the GC may adjust the threshold for triggering the next GC.
+    rb_gc_adjust_memory_usage(sizeof(VALUE) * build_array_data.capa);
+
+    RUBY_DEBUG_LOG("Begin enumerating %zu objects\n", build_array_data.len);
+
+    // Now enumerate objects.
+    // If GC is triggered in `callback`, `tmpbuf` will keep elements of `array` alive.
+    for (size_t i = 0; i < build_array_data.len; i++) {
+        volatile VALUE object = array[i];
+        size_t object_size = rb_mmtk_get_object_size(object);
+        uintptr_t object_end = object + object_size;
+
+        RUBY_DEBUG_LOG("Enumerating object: %p\n", (void*)object);
+        callback((void*)object, (void*)object_end, object_size, data);
+        RB_GC_GUARD(object);
+
+        // Clear the element so that it no longer pins the object if it dies.
+        array[i] = 0;
+    }
+
+    RUBY_DEBUG_LOG("End enumerating %zu objects\n", build_array_data.len);
+
+    // Explicitly free `array` because we know it is no longer used.
+    // Don't wait for GC to free it because `free()` is a bottleneck during GC.
+    // Adjust memory usage accordingly.
+    rb_imemo_tmpbuf_set_ptr(tmpbuf, NULL);
+    ((rb_imemo_tmpbuf_t*)tmpbuf)->cnt = 0;
+    free(array);
+    rb_gc_adjust_memory_usage(-(ssize_t)(sizeof(VALUE) * build_array_data.capa));
+
+    RB_GC_GUARD(tmpbuf);
+}
+#endif
+
 void
 rb_gc_impl_each_objects(void *objspace_ptr, each_obj_callback *callback, void *data)
 {
+    WHEN_USING_MMTK({
+        rb_mmtk_each_objects_safe(callback, data);
+        return;
+    })
+
     objspace_each_objects(objspace_ptr, callback, data, TRUE);
 }
 

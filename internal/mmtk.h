@@ -254,4 +254,10 @@ bool mmtk_is_object_wb_unprotected(MMTk_ObjectReference object);
 
 void mmtk_object_reference_write_post(MMTk_Mutator *mutator, MMTk_ObjectReference object);
 
+/**
+ * Enumerate objects.  This function will call `callback(object, data)` for each object. It has
+ * undefined behavior if allocation or GC happens while this function is running.
+ */
+void mmtk_enumerate_objects(void (*callback)(MMTk_ObjectReference, void*), void *data);
+
 #endif /* MMTK_H */

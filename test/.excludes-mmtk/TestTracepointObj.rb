@@ -1,1 +1,1 @@
-exclude(/test_/, "tracepoints are not supported")
+exclude(/test_/, "tracepoints does not supported GC stats yet")
