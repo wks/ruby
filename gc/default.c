@@ -10607,7 +10607,7 @@ rb_mmtk_update_obj_id_tables(void)
     // This table hashes Fixnum and Bignum by value (object_id_hash_type),
     // so the hash will not change if the key is Bignum and it is moved.
     // We can update keys and values in place.
-    gc_update_table_refs(objspace, objspace->id_to_obj_tbl);
+    gc_update_table_refs(objspace->id_to_obj_tbl);
 }
 
 void
