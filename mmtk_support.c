@@ -1353,6 +1353,12 @@ rb_mmtk_panic_if_multiple_ractor(const char *msg)
     }
 }
 
+bool
+rb_mmtk_is_valid_objref(VALUE obj)
+{
+    return obj != 0 && obj % sizeof(VALUE) == 0 && mmtk_is_mmtk_object((MMTk_Address)obj);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Vanilla GC timing
 ////////////////////////////////////////////////////////////////////////////////

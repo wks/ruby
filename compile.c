@@ -48,6 +48,9 @@
 #include "insns.inc"
 #include "insns_info.inc"
 
+// conditional compilation macros for MMTk
+#include "internal/mmtk_macros.h"
+
 #define FIXNUM_INC(n, i) ((n)+(INT2FIX(i)&~FIXNUM_FLAG))
 #define FIXNUM_OR(n, i) ((n)|INT2FIX(i))
 
@@ -5420,7 +5423,13 @@ compile_massign_lhs(rb_iseq_t *iseq, LINK_ANCHOR *const pre, LINK_ANCHOR *const 
                 ci = ci_flag_set(iseq, ci, VM_CALL_ARGS_SPLAT_MUT);
             }
             OPERAND_AT(iobj, 0) = (VALUE)ci;
+            WHEN_USING_MMTK2({
+                // iobj is not a heap object, so it is technically incorrect to use it as the
+                // argument to the write barrier.
+                rb_gc_writebarrier_remember((VALUE)iseq);
+            }, {
             RB_OBJ_WRITTEN(iseq, Qundef, iobj);
+            });
 
             /* Given: h[*a], h[*b, 1] = ary
              *  h[*a] uses splatarray false and does not set VM_CALL_ARGS_SPLAT_MUT,

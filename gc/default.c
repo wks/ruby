@@ -6913,6 +6913,21 @@ void
 rb_gc_impl_writebarrier(void *objspace_ptr, VALUE a, VALUE b)
 {
 #if USE_MMTK
+    // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
+    // Whenever writing an object field using the write barrier, it will assert the source object
+    // and the new value are valid objects.
+#ifdef MMTK_WB_ASSERT_VO
+    if (rb_mmtk_enabled_p()) {
+        if (!rb_mmtk_is_valid_objref(a)) {
+            rb_bug("a is not MMTk object: %p", (void*)a);
+        }
+        if (!SPECIAL_CONST_P(b)) {
+            if (!rb_mmtk_is_valid_objref(b)) {
+                rb_bug("b is not MMTk object: %p", (void*)b);
+            }
+        }
+    }
+#endif
     if (rb_mmtk_enabled_p() && rb_mmtk_use_barrier) {
         mmtk_object_reference_write_post(GET_THREAD()->mutator, (MMTk_ObjectReference)a);
         return;
@@ -6958,6 +6973,14 @@ void
 rb_gc_impl_writebarrier_unprotect(void *objspace_ptr, VALUE obj)
 {
 #if USE_MMTK
+    // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
+#ifdef MMTK_WB_ASSERT_VO
+    if (rb_mmtk_enabled_p()) {
+        if (!rb_mmtk_is_valid_objref(obj)) {
+            rb_bug("Attempted to unprotect invalid objref: %p", (void*)obj);
+        }
+    }
+#endif
     if (rb_mmtk_enabled_p()) {
         mmtk_register_wb_unprotected_object((MMTk_ObjectReference)obj);
         return;
@@ -7013,6 +7036,14 @@ void
 rb_gc_impl_writebarrier_remember(void *objspace_ptr, VALUE obj)
 {
 #if USE_MMTK
+    // Define the MMTK_WB_ASSERT_VO macro in the compiler command line to enable the assertions.
+#ifdef MMTK_WB_ASSERT_VO
+    if (rb_mmtk_enabled_p()) {
+        if (!rb_mmtk_is_valid_objref(obj)) {
+            rb_bug("Attempt to remember invalid invalid objref: %p", (void*)obj);
+        }
+    }
+#endif
     if (rb_mmtk_enabled_p() && rb_mmtk_use_barrier) {
         mmtk_object_reference_write_post(GET_THREAD()->mutator, (MMTk_ObjectReference)obj);
         return;

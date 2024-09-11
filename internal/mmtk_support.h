@@ -121,6 +121,8 @@ bool rb_mmtk_is_mmtk_worker(void);
 bool rb_mmtk_is_mutator(void);
 void rb_mmtk_assert_mmtk_worker(void);
 void rb_mmtk_assert_mutator(void);
+bool rb_mmtk_is_valid_objref(VALUE obj);
+
 
 // Vanilla GC timing
 void rb_mmtk_gc_probe(bool enter);
