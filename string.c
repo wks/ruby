@@ -2125,8 +2125,18 @@ str_duplicate_setup(VALUE klass, VALUE str, VALUE dup)
         RB_OBJ_WRITE(dup, &RSTRING(dup)->as.heap.aux.shared, root);
 
         WHEN_USING_MMTK({
-            // We copy the strbuf from the shared root.
-            rb_mmtk_str_set_strbuf(dup, RSTRING_EXT(root)->strbuf);
+            if (!STR_EMBED_P(root)) {
+                VALUE strbuf = RSTRING_EXT(root)->strbuf;
+                // If the root is not embedded, it must have a strbuf.
+                RUBY_ASSERT_MESG(strbuf != 0, "strbuf is NULL");
+                // And it must be a valid object reference.
+                RUBY_ASSERT_MESG(rb_mmtk_is_valid_objref(strbuf),
+                                 "strbuf is an invalid ref",
+                                 "strbuf: %p",
+                                 (void*)strbuf);
+                // We copy the strbuf from the shared root.
+                rb_mmtk_str_set_strbuf(dup, RSTRING_EXT(root)->strbuf);
+            }
         })
 
         flags |= RSTRING_NOEMBED | STR_SHARED;
