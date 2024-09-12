@@ -5,13 +5,17 @@
 
 #if USE_MMTK
 #define IF_USE_MMTK(a) a
+#define IF_NOT_USE_MMTK(a)
 #define IF_USE_MMTK2(a, b) a
 #define WHEN_USING_MMTK(a) if (rb_mmtk_enabled_p()) { a }
+#define WHEN_NOT_USING_MMTK(a) if (!rb_mmtk_enabled_p()) { a }
 #define WHEN_USING_MMTK2(a, b) if (rb_mmtk_enabled_p()) { a } else { b }
 #else
 #define IF_USE_MMTK(a)
+#define IF_NOT_USE_MMTK(a) a
 #define IF_USE_MMTK2(a, b) b
 #define WHEN_USING_MMTK(a)
+#define WHEN_NOT_USING_MMTK(a) a
 #define WHEN_USING_MMTK2(a, b) b
 #endif
 
