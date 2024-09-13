@@ -234,9 +234,45 @@ static inline long str_embed_capa(VALUE str);
 static inline int str_dependent_p(VALUE str);
 
 static inline VALUE
+rb_mmtk_str_get_strbuf_nullable(VALUE str)
+{
+    RUBY_ASSERT_MESG(!STR_EMBED_P(str), "str is embedded", "str: %p", (void*)str);
+
+    VALUE strbuf = RSTRING_EXT(str)->strbuf;
+
+#if RUBY_DEBUG
+    if (FL_TEST(str, STR_NOFREE)) {
+        RUBY_ASSERT_MESG(strbuf == 0,
+                         "no-free string has non-null strbuf",
+                         "str: %p, strbuf: %p, valid: %d",
+                         (void*)str, (void*)strbuf, rb_mmtk_is_valid_objref(strbuf));
+    } else {
+        RUBY_ASSERT_MESG(strbuf != 0, "strbuf is null", "str: %p", (void*)str);
+        RUBY_ASSERT_MESG(rb_mmtk_is_valid_objref(strbuf),
+                        "strbuf does not point to a valid MMTk object",
+                        "str: %p, strbuf: %p", (void*)str, (void*)strbuf);
+    }
+#endif
+
+    return strbuf;
+}
+
+static inline VALUE
+rb_mmtk_str_get_strbuf(VALUE str)
+{
+    VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(str);
+
+    RUBY_ASSERT_MESG(strbuf != 0, "strbuf is null", "str: %p, no_free: %d",
+                     (void*)str, rb_mmtk_str_no_free(str));
+
+    return strbuf;
+}
+
 // Return the object that actually holds the content of `str`.
 // For embedded strings, it is the string itself;
-// For heap strings, it is the backing strbuf.
+// For heap strings, it is the backing strbuf,
+// but the strbuf may be NULL if the string has the `STR_NOFREE` flag.
+static inline VALUE
 rb_mmtk_string_content_holder(VALUE str)
 {
     RBIMPL_ASSERT_TYPE(str, RUBY_T_STRING);
@@ -245,7 +281,7 @@ rb_mmtk_string_content_holder(VALUE str)
         return str;
     }
     else {
-        return RSTRING_EXT(str)->strbuf;
+        return rb_mmtk_str_get_strbuf_nullable(str);
     }
 }
 
@@ -253,7 +289,7 @@ void
 rb_mmtk_str_set_strbuf(VALUE str, VALUE strbuf)
 {
     RUBY_ASSERT(rb_mmtk_enabled_p());
-    RB_OBJ_WRITE(str, RSTRING_EXT(str), strbuf);
+    RB_OBJ_WRITE(str, &RSTRING_EXT(str)->strbuf, strbuf);
 }
 
 // Attach a heap string `str` with a newly allocated imemo:mmtk_strbuf of a given capacity `capa`.
@@ -310,19 +346,25 @@ rb_mmtk_resize_capa_term(VALUE str, size_t capacity, size_t termlen)
                 tlen);
             RSTRING(str)->len = tlen;
             STR_SET_NOEMBED(str);
-            RSTRING(str)->as.heap.aux.capa = (capacity);
+            RSTRING(str)->as.heap.aux.capa = capacity;
         }
     }
     else {
         if ((size_t)STR_HEAP_SIZE(str) < capacity + termlen) {
-            assert(!FL_TEST((str), STR_SHARED));
+            // Shared strings and shared roots cannot be modified.
+            RUBY_ASSERT(!FL_TEST(str, STR_SHARED));
+            RUBY_ASSERT(!FL_TEST(str, STR_SHARED_ROOT));
+            // No-free strings don't have strbuf.
+            RUBY_ASSERT(!FL_TEST(str, STR_NOFREE));
+
+            VALUE strbuf = rb_mmtk_str_get_strbuf(str);
             rb_mmtk_str_new_strbuf_copy(
                     str,
                     (size_t)(capacity) + (termlen),
-                    RSTRING_EXT(str)->strbuf,
+                    strbuf,
                     RSTRING(str)->as.heap.ptr,
                     STR_HEAP_SIZE(str));
-            RSTRING(str)->as.heap.aux.capa = (capacity);
+            RSTRING(str)->as.heap.aux.capa = capacity;
         }
     }
 }
@@ -339,10 +381,12 @@ rb_mmtk_str_sized_realloc_n(VALUE str, size_t new_size)
     size_t old_size = STR_HEAP_SIZE(str);
     size_t copy_size = old_size < new_size ? old_size : new_size;
 
+    VALUE strbuf = rb_mmtk_str_get_strbuf(str);
+
     rb_mmtk_str_new_strbuf_copy(
         str,
         new_size,
-        RSTRING_EXT(str)->strbuf,
+        strbuf,
         RSTRING(str)->as.heap.ptr,
         copy_size);
     RSTRING(str)->as.heap.aux.capa = new_size;
@@ -1262,10 +1306,18 @@ str_new_static(VALUE klass, const char *ptr, long len, int encindex)
         str = str_alloc_heap(klass);
         RSTRING(str)->len = len;
         // MMTk: This is a "static string".  `ptr` points to off-heap memory.
-        // If `STR_NOFREE` is set, the GC will not consider the `RSTRING_EXT(str)->strbuf` field.
+        // In this case, str shall have the `STR_NOFREE` flag set,
+        // and the `RSTRING_EXT(str)->strbuf` field shall be NULL.
         RSTRING(str)->as.heap.ptr = (char *)ptr;
         RSTRING(str)->as.heap.aux.capa = len;
         RBASIC(str)->flags |= STR_NOFREE;
+
+#if RUBY_DEBUG
+        WHEN_USING_MMTK({
+            // Fields of newly allocated objects should all be zero.
+            RUBY_ASSERT(RSTRING_EXT(str)->strbuf == 0);
+        })
+#endif
     }
     rb_enc_associate_index(str, encindex);
     return str;
@@ -1578,7 +1630,12 @@ str_replace_shared_without_enc(VALUE str2, VALUE str)
         WHEN_USING_MMTK({
             if (!STR_EMBED_P(root)) {
                 // Also set the strbuf to the root's strbuf.
-                rb_mmtk_str_set_strbuf(str2, RSTRING_EXT(root)->strbuf);
+
+                // Note: The root may be obtained from `rb_str_new_frozen`,
+                // and that may give us a no-free string.
+                // If the root is really no-free, we just assign NULL to str2's strbuf.
+                VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(root);
+                rb_mmtk_str_set_strbuf(str2, strbuf);
             } else {
                 rb_mmtk_str_set_strbuf(str2, 0);
             }
@@ -1662,7 +1719,9 @@ rb_str_tmp_frozen_no_embed_acquire(VALUE orig)
         RBASIC(orig)->flags &= ~STR_NOFREE;
 
         WHEN_USING_MMTK({
-            rb_mmtk_str_set_strbuf(str, RSTRING_EXT(orig)->strbuf);
+            // Note: The root may be no-free.
+            VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(orig);
+            rb_mmtk_str_set_strbuf(str, strbuf);
         })
 
         STR_SET_SHARED(orig, str);
@@ -1743,16 +1802,10 @@ heap_str_make_shared(VALUE klass, VALUE orig)
     RSTRING(str)->as.heap.aux.capa = RSTRING(orig)->as.heap.aux.capa;
 
     WHEN_USING_MMTK({
-        if (!FL_TEST_RAW(orig, STR_NOFREE)) {
-            // Since this function transfers the ownership of the underlying buffer to `str`,
-            // the `strbuf` field should also be transferred.  Since `strbuf` is a heap reference,
-            // we just copy it.
-           rb_mmtk_str_set_strbuf(str, RSTRING_EXT(orig)->strbuf);
-        } else {
-            // Otherwise, `orig` has `STR_NOFREE`, and the underlying buffer is not in the heap.
-            // We don't copy the `strbuf` because it should be NULL.
-            RUBY_ASSERT(RSTRING_EXT(orig)->strbuf == 0);
-        }
+        // The original string may have the `STR_NOFREE` flag.
+        // In that case `strbuf` will be NULL.
+        VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(orig);
+        rb_mmtk_str_set_strbuf(str, strbuf);
     })
 
     RBASIC(str)->flags |= RBASIC(orig)->flags & STR_NOFREE;
@@ -2000,7 +2053,9 @@ str_shared_replace(VALUE str, VALUE str2)
         WHEN_USING_MMTK({
             // No matter whether str2 has `STR_SHARED` or not, its `strbuf` field always points
             // to the right strbuf.  We copy it over.
-            rb_mmtk_str_set_strbuf(str, RSTRING_EXT(str2)->strbuf);
+            // If `str2` has `STR_NOFREE`, its strbuf will be NULL.
+            VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(str2);
+            rb_mmtk_str_set_strbuf(str, strbuf);
         })
 
         /* abandon str2 */
@@ -2047,7 +2102,9 @@ str_replace(VALUE str, VALUE str2)
 
         WHEN_USING_MMTK({
             // Since str2 is already shared, we copy the strbuf field over.
-            rb_mmtk_str_set_strbuf(str, RSTRING_EXT(str2)->strbuf);
+            // If `str2` has `STR_NOFREE`, its strbuf will be null.
+            VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(str2);
+            rb_mmtk_str_set_strbuf(str, strbuf);
         })
 
         STR_SET_SHARED(str, shared);
@@ -2126,16 +2183,11 @@ str_duplicate_setup(VALUE klass, VALUE str, VALUE dup)
 
         WHEN_USING_MMTK({
             if (!STR_EMBED_P(root)) {
-                VALUE strbuf = RSTRING_EXT(root)->strbuf;
-                // If the root is not embedded, it must have a strbuf.
-                RUBY_ASSERT_MESG(strbuf != 0, "strbuf is NULL");
-                // And it must be a valid object reference.
-                RUBY_ASSERT_MESG(rb_mmtk_is_valid_objref(strbuf),
-                                 "strbuf is an invalid ref",
-                                 "strbuf: %p",
-                                 (void*)strbuf);
-                // We copy the strbuf from the shared root.
-                rb_mmtk_str_set_strbuf(dup, RSTRING_EXT(root)->strbuf);
+                // If root is not embedded, copy over the strbuf.
+                // In the case where root has the `STR_NOFREE` flag,
+                // its strbuf will be NULL.  We just copy NULL over.
+                VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(root);
+                rb_mmtk_str_set_strbuf(dup, strbuf);
             }
         })
 
@@ -2275,7 +2327,7 @@ rb_str_init(int argc, VALUE *argv, VALUE str)
                     rb_mmtk_str_new_strbuf_copy(
                         str,
                         size,
-                        RSTRING_EXT(str)->strbuf,
+                        rb_mmtk_string_content_holder(str),
                         old_ptr,
                         osize < size ? osize : size);
                 }, {
