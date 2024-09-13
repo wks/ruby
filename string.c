@@ -241,7 +241,52 @@ rb_mmtk_str_get_strbuf_nullable(VALUE str)
     VALUE strbuf = RSTRING_EXT(str)->strbuf;
 
 #if RUBY_DEBUG
-    if (FL_TEST(str, STR_NOFREE)) {
+    if (STR_SHARED_P(str)) {
+        VALUE shared_root = RSTRING(str)->as.heap.aux.shared;
+        RUBY_ASSERT_MESG(rb_mmtk_is_valid_objref(shared_root),
+                         "shared root is not a valid MMTk object",
+                         "str: %p, shared_root: %p", (void*)str, (void*)shared_root);
+        RUBY_ASSERT_MESG(FL_TEST(shared_root, STR_SHARED_ROOT),
+                         "shared root does not have the STR_SHARED_ROOT flag",
+                         "str: %p, shared_root: %p", (void*)str, (void*)shared_root);
+        if (STR_EMBED_P(shared_root)) {
+            RUBY_ASSERT_MESG(strbuf == 0,
+                             "shared root is embedded, but strbuf is not null",
+                             "str: %p, shared_root: %p, strbuf: %p (valid? %d)",
+                             (void*)str, (void*)shared_root, (void*)strbuf, rb_mmtk_is_valid_objref(strbuf));
+        } else {
+            VALUE shared_root_strbuf = RSTRING_EXT(shared_root)->strbuf;
+            if (FL_TEST(shared_root, STR_NOFREE)) {
+                RUBY_ASSERT_MESG(shared_root_strbuf == 0,
+                                 "shared root is no-free, but has non-null strbuf",
+                                 "str: %p, shared_root: %p, shared_root_strbuf: %p (valid? %d)",
+                                 (void*)str, (void*)shared_root, (void*)shared_root_strbuf, rb_mmtk_is_valid_objref(strbuf));
+                RUBY_ASSERT_MESG(strbuf == 0,
+                                 "shared root is no-free, but shared string has non-null strbuf",
+                                 "str: %p, shared_root: %p, strbuf: %p (valid? %d)",
+                                 (void*)str, (void*)shared_root, (void*)strbuf, rb_mmtk_is_valid_objref(strbuf));
+            } else {
+                RUBY_ASSERT_MESG(shared_root_strbuf != 0,
+                                 "shared root is not no-free, but has null strbuf",
+                                 "str: %p, shared_root: %p",
+                                 (void*)str, (void*)shared_root);
+                RUBY_ASSERT_MESG(strbuf != 0,
+                                 "shared root is not no-free, but shared string has null strbuf",
+                                 "str: %p, shared_root: %p",
+                                 (void*)str, (void*)shared_root);
+
+                bool strbuf_valid = rb_mmtk_is_valid_objref(strbuf);
+                bool shared_root_strbuf_valid = rb_mmtk_is_valid_objref(shared_root_strbuf);
+                RUBY_ASSERT_MESG(strbuf == shared_root_strbuf,
+                                 "shared string has different strbuf from its shared root",
+                                 "str: %p, shared_root: %p, strbuf: %p (valid? %d) shared_root_strbuf: %p (valid? %d)",
+                                 (void*)str, (void*)shared_root, (void*)strbuf, strbuf_valid, (void*)shared_root_strbuf, shared_root_strbuf_valid);
+
+                RUBY_ASSERT_MESG(strbuf_valid, "strbuf is not a valid MMTk object",
+                                 "str: %p, strbuf: %p", (void*)str, (void*)strbuf);
+            }
+        }
+    } else if (FL_TEST(str, STR_NOFREE)) {
         RUBY_ASSERT_MESG(strbuf == 0,
                          "no-free string has non-null strbuf",
                          "str: %p, strbuf: %p, valid: %d",
