@@ -1738,6 +1738,20 @@ rb_str_tmp_frozen_acquire(VALUE orig)
 VALUE
 rb_str_tmp_frozen_no_embed_acquire(VALUE orig)
 {
+    WHEN_USING_MMTK({
+        // The default GC may lock (mprotect with PROT_NONE) pages of GC memory during compaction.
+        // If that happens while a pointer to the string payload in an embedded string is used for
+        // IO, with GVL released, the OS or external native programs may read or write protected
+        // pages, causing segmentation fault.  The intention of `rb_str_tmp_frozen_no_embed_acquire`
+        // is working around this problem by forcing the given `orig` string to be allocated in the
+        // malloc heap.
+        //
+        // When using MMTk, this doesn't make sense because MMTk never protect pages of live
+        // objects, and we allocate non-embedded string buffers as `imemo:mmtk_strbuf` in the MMTk
+        // heap.  So we simply call `rb_str_tmp_frozen_acquire` instead.
+        return rb_str_tmp_frozen_acquire(orig);
+    })
+
     if (OBJ_FROZEN_RAW(orig) && !STR_EMBED_P(orig) && !rb_str_reembeddable_p(orig)) return orig;
     if (STR_SHARED_P(orig) && !STR_EMBED_P(RSTRING(orig)->as.heap.aux.shared)) return rb_str_tmp_frozen_acquire(orig);
 
@@ -1762,13 +1776,6 @@ rb_str_tmp_frozen_no_embed_acquire(VALUE orig)
         RSTRING(str)->as.heap.ptr = RSTRING(orig)->as.heap.ptr;
         RBASIC(str)->flags |= RBASIC(orig)->flags & STR_NOFREE;
         RBASIC(orig)->flags &= ~STR_NOFREE;
-
-        WHEN_USING_MMTK({
-            // Note: The root may be no-free.
-            VALUE strbuf = rb_mmtk_str_get_strbuf_nullable(orig);
-            rb_mmtk_str_set_strbuf(str, strbuf);
-        })
-
         STR_SET_SHARED(orig, str);
     }
 
