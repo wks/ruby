@@ -37,6 +37,9 @@
 
 #include "probes.h"
 
+#define RUBY_DTRACE_GC_HOOK(name, ...) \
+    do {if (RUBY_DTRACE_GC_##name##_ENABLED()) RUBY_DTRACE_GC_##name(__VA_ARGS__);} while (0)
+
 #ifdef BUILDING_MODULAR_GC
 # define RB_DEBUG_COUNTER_INC(_name) ((void)0)
 # define RB_DEBUG_COUNTER_INC_IF(_name, cond) (!!(cond))
@@ -6397,12 +6400,13 @@ gc_mark_stacked_objects(rb_objspace_t *objspace, int incremental, size_t count)
         }
         gc_mark_children(objspace, obj);
 
+        popped_count++;
+
         if (incremental) {
             if (RGENGC_CHECK_MODE && !RVALUE_MARKING(objspace, obj)) {
                 rb_bug("gc_mark_stacked_objects: incremental, but marking bit is 0");
             }
             CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS(obj), obj);
-            popped_count++;
 
             if (popped_count + (objspace->marked_slots - marked_slots_at_the_beginning) > count) {
                 break;
@@ -6412,6 +6416,8 @@ gc_mark_stacked_objects(rb_objspace_t *objspace, int incremental, size_t count)
             /* just ignore marking bits */
         }
     }
+
+    RUBY_DTRACE_GC_HOOK(MARK_STACKED_OBJECTS, popped_count);
 
     if (RGENGC_CHECK_MODE >= 3) gc_verify_internal_consistency(objspace);
 
@@ -8496,6 +8502,8 @@ gc_enter(rb_objspace_t *objspace, enum gc_enter_event event, unsigned int *lock_
 {
     *lock_lev = RB_GC_VM_LOCK();
 
+    RUBY_DTRACE_GC_HOOK(ENTER, event);
+
     switch (event) {
       case gc_enter_event_rest:
       case gc_enter_event_start:
@@ -8526,6 +8534,8 @@ static inline void
 gc_exit(rb_objspace_t *objspace, enum gc_enter_event event, unsigned int *lock_lev)
 {
     GC_ASSERT(during_gc != 0);
+
+    RUBY_DTRACE_GC_HOOK(EXIT, event);
 
     rb_gc_event_hook(0, RUBY_INTERNAL_EVENT_GC_EXIT);
 
@@ -10515,9 +10525,6 @@ gc_prof_timer_stop(rb_objspace_t *objspace)
         record->gc_invoke_time -= objspace->profile.invoke_time;
     }
 }
-
-#define RUBY_DTRACE_GC_HOOK(name) \
-    do {if (RUBY_DTRACE_GC_##name##_ENABLED()) RUBY_DTRACE_GC_##name();} while (0)
 
 static inline void
 gc_prof_mark_timer_start(rb_objspace_t *objspace)
