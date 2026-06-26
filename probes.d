@@ -262,6 +262,13 @@ provider ruby {
   */
   probe gc__obj_free(void *obj, int flags);
 
+  probe gc__sweep_lock_lock();
+  probe gc__sweep_lock_unlock();
+
+  probe gc__sweep_step_worker_begin(int slot_size);
+  probe gc__sweep_step_worker_info(int sweep_budget, int pool_budget, int slot_budget);
+  probe gc__sweep_step_worker_end(int state);
+
   /*
      ruby:::gc-xmalloc(n, size);
 

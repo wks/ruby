@@ -70,6 +70,13 @@ module RubyTimelineTool
     'obj_free' => [
       tp('gc__obj_free',      "ruby",     'gc_obj_free',      'i', args: {obj: :to_i, flags: RubyFlags}), # TODO: flags converter
     ],
+    'parallel_sweep' => [
+      tp('gc__sweep_lock_lock',           'default',  'GCSweepLock',            'B', visualize: false),
+      tp('gc__sweep_lock_unlock',         'default',  'GCSweepLock',            'E', visualize: false),
+      tp('gc__sweep_step_worker_begin',   'default',  'GCSweepStepWorker',      'B', args: {slot_size: :to_i}),
+      tp('gc__sweep_step_worker_info',    'default',  'GCSweepStepWorker_info', 'meta', args: {sweep_budget: :to_i, pool_budget: :to_i, slot_budget: :to_i}),
+      tp('gc__sweep_step_worker_end',     'default',  'GCSweepStepWorker',      'E'),
+    ],
     'xmalloc' => [
       tp('gc__xmalloc',       "ruby",     'gc_xmalloc',       'i', args: {n: :to_i, size: :to_i}),
       tp('gc__xcalloc',       "ruby",     'gc_xcalloc',       'i', args: {n: :to_i, size: :to_i}),

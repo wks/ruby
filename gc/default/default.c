@@ -1228,6 +1228,8 @@ sweep_lock_lock_impl(rb_objspace_t *objspace, const char *function, int line)
 #if VM_CHECK_MODE > 0
     sweep_lock_owner = pthread_self();
 #endif
+
+    RUBY_DTRACE_GC_HOOK(SWEEP_LOCK_LOCK);
 }
 
 #define sweep_lock_lock(objspace) \
@@ -1242,6 +1244,8 @@ sweep_lock_unlock(rb_objspace_t *objspace)
     sweep_lock_owner = 0;
 #endif
     rb_native_mutex_unlock(&objspace->sweep_lock);
+
+    RUBY_DTRACE_GC_HOOK(SWEEP_LOCK_UNLOCK);
 }
 
 static inline void
@@ -4801,6 +4805,9 @@ gc_sweep_step_worker(rb_objspace_t *objspace, rb_heap_t *heap)
     size_t sweep_budget = GC_INCREMENTAL_SWEEP_BYTES / heap->slot_size;
     size_t pool_budget = GC_INCREMENTAL_SWEEP_POOL_BYTES / heap->slot_size;
     size_t slot_budget = sweep_budget + pool_budget;
+
+    RUBY_DTRACE_GC_HOOK(SWEEP_STEP_WORKER_INFO, sweep_budget, pool_budget, slot_budget);
+
     while (1) {
         /* Claim work via atomic fetch_add. The claim itself is lock-free, so we drop sweep_lock */
         bool was_bg_mode = objspace->background_sweep_mode;
@@ -4950,7 +4957,9 @@ gc_sweep_thread_func(void *ptr)
         abort = false;
         for (int i = 0; i < HEAP_COUNT; i++) {
             rb_heap_t *heap = &heaps[i];
+            RUBY_DTRACE_GC_HOOK(SWEEP_STEP_WORKER_BEGIN, heap->slot_size);
             enum sweep_step_worker_state state = gc_sweep_step_worker(objspace, heap);
+            RUBY_DTRACE_GC_HOOK(SWEEP_STEP_WORKER_END, state);
             switch (state) {
                 case WORKER_SKIP_HEAP:
                 case WORKER_NEXT_HEAP_FG:
